@@ -234,3 +234,120 @@ time.reltime{white-space:nowrap}
 .notify-panel[hidden],.doc-conflict[hidden],#notify-panel[hidden],#doc-conflict[hidden]{display:none!important}
 .notify-button{display:inline-flex;align-items:center;justify-content:center}
 .bell-icon{width:15px;height:15px}
+
+/* =========================================================
+   可读性与动效优化（覆盖层）
+   ========================================================= */
+.workspace-main{color:#20241e;line-height:1.7;-webkit-font-smoothing:antialiased}
+.workspace-view{scrollbar-width:thin;scrollbar-color:#b7bcae transparent}
+.workspace-view::-webkit-scrollbar{width:9px;height:9px}
+.workspace-view::-webkit-scrollbar-thumb{background:#c3c8b9;border-radius:6px}
+.workspace-view::-webkit-scrollbar-thumb:hover{background:#a9b09b}
+*:focus-visible{outline:2px solid #9db92e;outline-offset:2px;border-radius:2px}
+
+/* 视图切换淡入 */
+.workspace-view.active{animation:nexusViewIn .2s ease-out}
+@keyframes nexusViewIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* 面板/对话框打开动画 */
+dialog[open]{animation:nexusPop .18s ease-out}
+@keyframes nexusPop{from{opacity:0;transform:scale(.97) translateY(6px)}to{opacity:1;transform:none}}
+
+/* ---- 字号阶梯：正文 / 次要信息 / 标签 ---- */
+.document-card strong{font-size:12.5px!important}
+.document-card p{font-size:10.5px!important;color:#565c52!important}
+.document-card small{font-size:9.5px!important;color:#7c8277!important}
+.editor-page{font-size:15px;line-height:1.95}
+.editor-page p{font-size:15px;line-height:1.95}
+.document-history strong{font-size:10px}
+.document-history span{font-size:9.5px;color:#5d645a}
+.document-history small{font-size:9px;color:#8a9086}
+.revision-actions button{font-size:9px}
+.rd-note,.rd-loading{font-size:9.5px}
+.rd-line{font-size:10px}
+
+.idea-post p{font-size:13.5px;line-height:1.8;color:#2a2e26}
+.idea-post header strong{font-size:13.5px}
+.idea-post header span{font-size:10px;color:#7b8176}
+.idea-post footer button{font-size:11px;padding:6px 9px}
+.comment-item p{font-size:11.5px;color:#33382f}
+.comment-item p b{font-size:11.5px}
+.comment-form input{font-size:11.5px}
+.idea-composer textarea{font-size:13.5px;line-height:1.7}
+.idea-composer input{font-size:12px}
+
+.people-main strong{font-size:12.5px}
+.people-main span{font-size:11px;color:#5f665b;line-height:1.55}
+.role-tag{font-size:9.5px}
+.member-card p{font-size:11.5px;color:#d9dcd4!important;line-height:1.7}
+
+.task-card h3{font-size:13.5px;line-height:1.5}
+.task-card p{font-size:11.5px;line-height:1.7;color:#4c524a}
+.task-meta span{font-size:10px;color:#6b7267}
+.task-card footer small{font-size:9.5px}
+.task-card footer b{font-size:10.5px}
+.task-actions button{font-size:9.5px;padding:4px 10px}
+
+.stat-grid article small{font-size:9.5px;color:#6b7267!important}
+.ov-board-row span{font-size:10.5px}
+.ov-board-row b{font-size:14px}
+.ov-board-foot{font-size:10px;color:#6b7267;line-height:1.8}
+.ov-item-body p strong{font-size:12px}
+.ov-item-text{font-size:11.5px}
+.ov-item-body small{font-size:9.5px;color:#6b7267}
+.ov-group{font-size:10px}
+
+.asset-info strong{font-size:12.5px}
+.asset-info span{font-size:10px;color:#666d62}
+.asset-info small{font-size:10px;color:#8a9086}
+.asset-actions a,.asset-actions button{font-size:9.5px;padding:5px 11px}
+
+.asset-filters button{font-size:10px;padding:8px 14px}
+.doc-toolbar button,.doc-actions button{font-size:10px}
+#asset-upload-state,.asset-toolbar>span{font-size:10px}
+.board-heading .doc-search,.idea-filter-bar input[type="search"],.task-filter-bar input[type="search"]{font-size:11px;padding:7px 11px;width:200px}
+select{font-size:10.5px}
+
+.workspace-nav button{font-size:12px;letter-spacing:.02em}
+.workspace-nav button span{font-size:16px}
+.workspace-header button{font-size:10.5px}
+.server-state,.save-state{font-size:10px}
+.workspace-bottom small{font-size:9.5px}
+.people-controls select,.people-controls button{font-size:9.5px}
+
+.feed-footer small{font-size:9.5px}
+.feed-empty p,.asset-empty p,.team-empty p,.workspace-empty-state p{font-size:12px}
+.feed-empty h3,.asset-empty h3,.team-empty h3,.workspace-empty-state h3{font-size:17px}
+
+.notify-panel li b{font-size:10.5px}
+.notify-panel li small{font-size:9px}
+.notify-panel header b{font-size:10.5px}
+.notify-panel footer button{font-size:9.5px}
+
+.login-card label{font-size:10.5px}
+.login-card input,.login-card textarea,.login-card select{font-size:13px}
+.login-card h2{font-size:20px}
+.login-card>span{font-size:11px;color:#6b7267;line-height:1.6}
+.view-intro h2,.board-heading h2{font-size:33px}
+.view-intro>div>span{font-size:12px;color:#5f665b}
+
+/* ---- 动效：悬停与按压 ---- */
+.idea-post,.task-card,.asset-card,.document-card,.member-card{transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
+.idea-post:hover,.task-card:hover,.document-card:hover{border-color:#a9b78e;transform:translateY(-1px)}
+.asset-card:hover{border-color:#9db92e;transform:translateY(-2px)}
+button:active:not(:disabled){transform:scale(.97)}
+.task-card{cursor:default}
+.post-image img,.asset-thumb img{transition:transform .4s ease}
+.post-image:hover img,.asset-card:hover .asset-thumb img{transform:scale(1.04)}
+.document-card{transition:transform .18s ease,box-shadow .18s ease}
+
+/* 卡片入场淡入（限制级联避免闪烁观感） */
+.idea-post,.task-card{animation:nexusCardIn .26s ease backwards}
+.task-column .task-card:nth-child(2){animation-delay:.03s}
+.task-column .task-card:nth-child(3){animation-delay:.06s}
+.task-column .task-card:nth-child(4){animation-delay:.09s}
+.task-column .task-card:nth-child(5){animation-delay:.12s}
+@keyframes nexusCardIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* 弹层中的强调按钮 */
+.primary-button,.login-submit,.add-task{transition:transform .14s ease,background .2s ease,box-shadow .2s ease}
