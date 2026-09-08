@@ -1,17 +1,17 @@
 <#
-NEXUS LAB 一键启动脚本（Windows / PowerShell）
+NEXUS LAB one-command launcher (Windows PowerShell)
 
-用法:
-  ./start.ps1                                  # 局域网 0.0.0.0:8000，自动备份(每60分钟)
-  ./start.ps1 -Port 9000                       # 换端口
-  ./start.ps1 -NoBackup                        # 关闭自动备份
-  ./start.ps1 -DbPath .\data\nexus.db -UploadsPath .\data\uploads   # 自定义数据目录
+Usage:
+  ./start.ps1                                  # LAN on 0.0.0.0:8000, auto backup every 60 min
+  ./start.ps1 -Port 9000                       # different port
+  ./start.ps1 -NoBackup                        # disable auto backup
+  ./start.ps1 -DbPath .\data\nexus.db -UploadsPath .\data\uploads   # custom data dir
 
-首次投入使用:
-  1) 先备份并退役旧的 nexuslab.db（含演示成员），让第一个真实注册者成为管理员:
+First real launch:
+  1) Retire the demo DB so the first real registrant becomes admin:
        Rename-Item nexuslab.db nexuslab.db.demo-backup
-  2) 运行本脚本启动服务。
-  3) 第一个真实成员注册 -> 自动成为管理员；在 项目设置 里起名、可开启“仅限邀请注册”。
+  2) Run this script.
+  3) The first registered member is admin automatically (see README for the full flow).
 #>
 param(
     [string]$HostAddr = "0.0.0.0",
@@ -35,12 +35,12 @@ $lan = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty IPAddress
 
 Write-Host ""
-Write-Host "NEXUS LAB 启动中 ..." -ForegroundColor Green
-Write-Host ("  本机访问:  http://127.0.0.1:{0}" -f $Port)
-if ($lan) { Write-Host ("  局域网访问: http://{0}:{1}   <- 把这条发给队友" -f $lan, $Port) -ForegroundColor Cyan }
-Write-Host "  第一个注册的成员会自动成为管理员（负责项目设置/角色/公告/邀请码）"
-if (-not $NoBackup) { Write-Host "  自动备份已开启（每 $BackupMinutes 分钟，保留最近 24 份）" }
-Write-Host "  队友连不上时(管理员身份): netsh advfirewall firewall add rule name=NexusLab dir=in action=allow protocol=TCP localport=$Port"
+Write-Host "NEXUS LAB starting ..." -ForegroundColor Green
+Write-Host ("  Local:   http://127.0.0.1:{0}" -f $Port)
+if ($lan) { Write-Host ("  LAN:     http://{0}:{1}   <- share this with teammates" -f $lan, $Port) -ForegroundColor Cyan }
+Write-Host "  The FIRST registered member becomes admin (project name, roles, invite code, announcements)"
+if (-not $NoBackup) { Write-Host "  Auto backup ON (every $BackupMinutes min, keep last 24)" }
+Write-Host "  If teammates cannot connect (run as admin): netsh advfirewall firewall add rule name=NexusLab dir=in action=allow protocol=TCP localport=$Port"
 Write-Host ""
 
 Set-Location $Root
