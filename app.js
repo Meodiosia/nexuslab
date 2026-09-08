@@ -87,18 +87,77 @@ function escapeHtml(value) {
   return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character]));
 }
 
+/* ---- 轻提示 ---- */
+function toast(message, type = 'info', ms = 2600) {
+  let stack = document.querySelector('#toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    stack.setAttribute('aria-live', 'polite');
+    document.body.appendChild(stack);
+  }
+  const item = document.createElement('div');
+  item.className = `toast toast-${type}`;
+  item.textContent = message;
+  stack.appendChild(item);
+  requestAnimationFrame(() => item.classList.add('show'));
+  setTimeout(() => {
+    item.classList.remove('show');
+    setTimeout(() => item.remove(), 320);
+  }, ms);
+}
+
+/* ---- 相对时间 ---- */
+function timeAgo(value) {
+  if (!value) return '';
+  const timestamp = new Date(`${value.replace(' ', 'T')}Z`).getTime();
+  if (!Number.isFinite(timestamp)) return value;
+  const minutes = Math.floor((Date.now() - timestamp) / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  return formatDocumentTime(value);
+}
+
+function relTimeMarkup(value, extraClass = '') {
+  return `<time class="reltime ${extraClass}" data-ts="${escapeHtml(value || '')}">${escapeHtml(timeAgo(value))}</time>`;
+}
+
+setInterval(() => {
+  document.querySelectorAll('time.reltime[data-ts]').forEach((element) => {
+    const value = element.getAttribute('data-ts');
+    if (value) element.textContent = timeAgo(value);
+  });
+}, 30000);
+
+/* ---- 头像占位：首字母 + 稳定色相 ---- */
+function nameHue(name) {
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  return Math.abs(hash) % 360;
+}
+
 function avatarMarkup(member, className = 'post-avatar avatar-a') {
-  const label = escapeHtml(member.real_id || member.name || '?');
+  const name = member.real_id || member.name || '?';
+  const label = escapeHtml(name);
   if (member.avatar) return `<div class="${className} custom-avatar"><img src="${escapeHtml(member.avatar)}" alt="${label} 的头像"></div>`;
-  return `<div class="${className} avatar-placeholder" aria-label="${label} 尚未上传头像"></div>`;
+  return `<div class="${className} avatar-placeholder" style="--hue:${nameHue(name)}" aria-label="${label} 尚未上传头像"><span>${escapeHtml(name.slice(0, 1).toUpperCase())}</span></div>`;
+}
+
+function renderCommentItem(comment) {
+  const deleteButton = comment.owned ? `<button class="delete-comment" type="button" data-comment-id="${comment.id}">删除</button>` : '';
+  return `<div class="comment-item">${avatarMarkup(comment, 'comment-avatar')}<p><b>${escapeHtml(comment.real_id)}</b><span>${escapeHtml(comment.content)}</span></p>${deleteButton}</div>`;
 }
 
 function renderIdea(idea) {
   const image = idea.image ? `<div class="post-image user-post-image"><img src="${escapeHtml(idea.image)}" alt="用户上传的创意图片"></div>` : '';
-  const comments = (idea.comment_items || []).map((comment) => `<div class="comment-item">${avatarMarkup(comment, 'comment-avatar')}<p><b>${escapeHtml(comment.real_id)}</b><span>${escapeHtml(comment.content)}</span></p>${comment.owned ? `<button class="delete-comment" type="button" data-comment-id="${comment.id}">删除</button>` : ''}</div>`).join('');
+  const comments = (idea.comment_items || []).map(renderCommentItem).join('');
   const deleteButton = idea.owned ? '<button class="delete-idea" type="button">删除动态</button>' : '';
   const typeLabel = idea.idea_type === 'concept' ? '概念创意' : '玩法创意';
-  return `<article class="idea-post" data-idea-id="${idea.id || ''}"><header>${avatarMarkup(idea)}<div><strong>${escapeHtml(idea.name)}</strong><span>团队成员 · ${idea.created_at ? escapeHtml(idea.created_at) : '刚刚'}</span></div>${deleteButton}</header><p>${escapeHtml(idea.content).replace(/\n/g, '<br>')}</p>${image}<footer><button class="like-button ${idea.liked ? 'liked' : ''}" type="button"><span>${idea.liked ? '♥' : '♡'}</span> <b>${idea.likes || 0}</b></button><button class="comment-toggle" type="button">◌ <b>${idea.comments || 0} 条评论</b></button><span class="post-tag type-${idea.idea_type}">#${typeLabel}</span></footer><div class="comment-list">${comments}</div></article>`;
+  return `<article class="idea-post" data-idea-id="${idea.id || ''}"><header>${avatarMarkup(idea)}<div><strong>${escapeHtml(idea.name)}</strong><span>团队成员 · ${relTimeMarkup(idea.created_at)}</span></div>${deleteButton}</header><p>${escapeHtml(idea.content).replace(/\n/g, '<br>')}</p>${image}<footer><button class="like-button ${idea.liked ? 'liked' : ''}" type="button"><span>${idea.liked ? '♥' : '♡'}</span> <b>${idea.likes || 0}</b></button><button class="comment-toggle" type="button">◌ <b>${idea.comments || 0} 条评论</b></button><span class="post-tag type-${idea.idea_type}">#${typeLabel}</span></footer><div class="comment-list">${comments}</div></article>`;
 }
 
 function api(path, options = {}) {
@@ -170,8 +229,9 @@ function renderPresence(online) {
     const label = escapeHtml(member.real_id || '?');
     const content = member.avatar
       ? `<img src="${escapeHtml(member.avatar)}" alt="${label} 的头像">`
-      : escapeHtml((member.real_id || '?').slice(0, 1));
-    return `<i class="presence-chip" title="${label} 在线">${content}</i>`;
+      : escapeHtml((member.real_id || '?').slice(0, 1).toUpperCase());
+    const style = member.avatar ? '' : ` style="--hue:${nameHue(member.real_id)}"`;
+    return `<i class="presence-chip"${style} title="${label} 在线">${content}</i>`;
   }).join('');
   if (stackEl) stackEl.innerHTML = chips;
   const bottomText = document.querySelector('.workspace-bottom small');
@@ -290,7 +350,7 @@ function renderNotificationItems(items) {
   }
   list.innerHTML = items.map((item) => {
     const kindLabel = notifyRefLabels[item.ref_type] || item.ref_type;
-    return `<li class="${item.is_read ? 'read' : ''}"><button type="button" data-notify-item="${item.id}" data-notify-ref="${item.ref_type}" data-notify-ref-id="${item.ref_id || ''}"><b>${item.is_read ? '' : '● '}${escapeHtml(item.text)}</b><small>${escapeHtml(kindLabel)} · ${formatDocumentTime(item.created_at)}</small></button></li>`;
+    return `<li class="${item.is_read ? 'read' : ''}"><button type="button" data-notify-item="${item.id}" data-notify-ref="${item.ref_type}" data-notify-ref-id="${item.ref_id || ''}"><b>${item.is_read ? '' : '● '}${escapeHtml(item.text)}</b><small>${escapeHtml(kindLabel)} · ${relTimeMarkup(item.created_at)}</small></button></li>`;
   }).join('');
   list.querySelectorAll('[data-notify-item]').forEach((button) => button.addEventListener('click', () => {
     api('/api/notifications/read', { method: 'POST', body: JSON.stringify({ ids: [Number(button.dataset.notifyItem)] }) }).then(() => loadNotifications()).catch(() => {});
@@ -360,6 +420,7 @@ document.addEventListener('click', (event) => {
 function renderIdeas(ideas, updateSource = true) {
   if (updateSource) allIdeas = ideas;
   ideaFeed.innerHTML = ideas.length ? ideas.map(renderIdea).join('') : '<div class="feed-empty"><span>NO SIGNALS YET</span><h3>还没有人发布动态</h3><p>登录后发布第一条真实创意。</p></div>';
+  reopenExpandedComments();
   bindIdeaActions();
 }
 
@@ -462,7 +523,7 @@ function removeMember(memberId, name) {
 function refreshMembers() {
   return api('/api/members').then((data) => {
     const canManage = Boolean(currentMember && currentMember.role === 'admin');
-    publicTeamGrid.innerHTML = data.members.length ? data.members.map((member) => `<article class="member-card"><div class="avatar public-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div><span>团队成员</span><h3>${escapeHtml(member.real_id)}</h3><p>${escapeHtml(member.bio || '这个成员还没有填写自我介绍。')}</p><small>${roleLabels[member.role] || '成员'} · VERIFIED</small></div></article>`).join('') : '<div class="team-empty"><span>NO MEMBERS YET</span><h3>团队正在集结</h3><p>新用户创建账号后，会自动出现在这里。</p><button type="button" data-open-workspace>创建第一个账号 →</button></div>';
+    publicTeamGrid.innerHTML = data.members.length ? data.members.map((member) => `<article class="member-card">${memberAvatarShell(member, 'avatar public-avatar')}<div><span>团队成员</span><h3>${escapeHtml(member.real_id)}</h3><p>${escapeHtml(member.bio || '这个成员还没有填写自我介绍。')}</p><small>${roleLabels[member.role] || '成员'} · VERIFIED</small></div></article>`).join('') : '<div class="team-empty"><span>NO MEMBERS YET</span><h3>团队正在集结</h3><p>新用户创建账号后，会自动出现在这里。</p><button type="button" data-open-workspace>创建第一个账号 →</button></div>';
     publicTeamGrid.querySelector('[data-open-workspace]')?.addEventListener('click', openWorkspace);
     const peopleList = document.querySelector('#workspace-people-list');
     document.querySelector('#member-total').textContent = `${data.members.length} 位成员`;
@@ -471,7 +532,7 @@ function refreshMembers() {
       const controls = canManage && Number(member.id) !== Number(currentMember.id)
         ? `<div class="people-controls"><select data-member-role="${member.id}" aria-label="设置 ${escapeHtml(member.real_id)} 的角色">${roleOptionMarkup(role)}</select><button type="button" data-member-remove="${member.id}">移除</button></div>`
         : '';
-      return `<article class="people-row"><div class="people-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div class="people-main"><strong>${escapeHtml(member.real_id)}</strong><span>${escapeHtml(member.bio || '暂无自我介绍')}</span></div><span class="role-tag role-${role}">${roleLabels[role] || role}</span>${controls}</article>`;
+      return `<article class="people-row">${memberAvatarShell(member, 'people-avatar')}<div class="people-main"><strong>${escapeHtml(member.real_id)}</strong><span>${escapeHtml(member.bio || '暂无自我介绍')}</span></div><span class="role-tag role-${role}">${roleLabels[role] || role}</span>${controls}</article>`;
     }).join('') : '<div class="people-empty">还没有注册成员</div>';
     peopleList.querySelectorAll('[data-member-role]').forEach((select) => select.addEventListener('change', () => changeMemberRole(Number(select.dataset.memberRole), select.value)));
     peopleList.querySelectorAll('[data-member-remove]').forEach((button) => button.addEventListener('click', () => {
@@ -514,6 +575,8 @@ function requireLogin() {
   return false;
 }
 
+const expandedIdeaIds = new Set();
+
 function applyIdeaLikePatch(post, ideas) {
   const id = Number(post.dataset.ideaId);
   const fresh = (ideas || []).find((idea) => idea.id === id);
@@ -530,37 +593,112 @@ function applyIdeaLikePatch(post, ideas) {
   }
 }
 
+function bindDeleteCommentActions(scope) {
+  scope.querySelectorAll('.delete-comment').forEach((button) => button.addEventListener('click', () => {
+    if (!requireLogin()) return;
+    if (!canWrite()) { toast('只读成员不能删除评论', 'error'); return; }
+    if (!confirm('确认删除这条评论？')) return;
+    api(`/api/comments/${button.dataset.commentId}`, { method: 'DELETE' }).then(() => { refreshIdeas(); toast('评论已删除', 'success'); }).catch((error) => { serverState.textContent = error.message; });
+  }));
+}
+
+function patchCommentsIntoCard(post, ideas) {
+  const id = Number(post.dataset.ideaId);
+  const fresh = (ideas || []).find((idea) => idea.id === id);
+  if (!fresh) { refreshIdeas(); return; }
+  const index = allIdeas.findIndex((idea) => idea.id === id);
+  if (index >= 0) allIdeas[index] = Object.assign({}, allIdeas[index], fresh);
+  const list = post.querySelector('.comment-list');
+  if (list) {
+    list.innerHTML = (fresh.comment_items || []).map(renderCommentItem).join('');
+    bindDeleteCommentActions(list);
+  }
+  const count = post.querySelector('.comment-toggle b');
+  if (count) count.textContent = `${fresh.comments || 0} 条评论`;
+}
+
+function ensureCommentComposer(post) {
+  let form = post.querySelector('.comment-form');
+  if (form) return form;
+  const comments = post.querySelector('.comment-list');
+  if (!comments) return null;
+  comments.insertAdjacentHTML('afterend', '<form class="comment-form"><input placeholder="以实名 ID 评论..." required><button type="submit">发送</button></form>');
+  form = post.querySelector('.comment-form');
+  const input = form.querySelector('input');
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!requireLogin()) return;
+    if (!canWrite()) { toast('只读成员不能评论', 'error'); return; }
+    const value = input.value.trim();
+    if (!value) return;
+    api(`/api/ideas/${post.dataset.ideaId}/comments`, { method: 'POST', body: JSON.stringify({ content: value }) }).then((data) => {
+      input.value = '';
+      patchCommentsIntoCard(post, data.ideas);
+      toast('评论已发布', 'success');
+    }).catch((error) => { serverState.textContent = error.message; });
+  });
+  return form;
+}
+
+function reopenExpandedComments() {
+  if (!expandedIdeaIds.size) return;
+  ideaFeed.querySelectorAll('.idea-post').forEach((post) => {
+    if (expandedIdeaIds.has(Number(post.dataset.ideaId))) {
+      const list = post.querySelector('.comment-list');
+      if (list) list.classList.add('visible');
+      ensureCommentComposer(post);
+    }
+  });
+}
+
 function bindIdeaActions(root = ideaFeed) {
   root.querySelectorAll('.delete-idea').forEach((button) => button.addEventListener('click', () => {
+    if (!requireLogin()) return;
+    if (!canWrite()) { toast('只读成员不能删除动态', 'error'); return; }
     if (!confirm('确认删除这条动态？此操作无法撤销。')) return;
     const post = button.closest('.idea-post');
-    api(`/api/ideas/${post.dataset.ideaId}`, { method: 'DELETE' }).then(() => { refreshIdeas(); refreshOverview(); }).catch((error) => { serverState.textContent = error.message; });
+    api(`/api/ideas/${post.dataset.ideaId}`, { method: 'DELETE' }).then(() => { refreshIdeas(); refreshOverview(); toast('动态已删除', 'success'); }).catch((error) => { serverState.textContent = error.message; });
   }));
-  root.querySelectorAll('.delete-comment').forEach((button) => button.addEventListener('click', () => {
-    if (!confirm('确认删除这条评论？')) return;
-    api(`/api/comments/${button.dataset.commentId}`, { method: 'DELETE' }).then(() => refreshIdeas()).catch((error) => { serverState.textContent = error.message; });
-  }));
+  bindDeleteCommentActions(root);
   root.querySelectorAll('.like-button').forEach((button) => button.addEventListener('click', () => {
     if (!requireLogin()) return;
     if (!canWrite()) { serverState.textContent = '只读成员不能点赞'; return; }
     const post = button.closest('.idea-post');
-    api(`/api/ideas/${post.dataset.ideaId}/like`, { method: 'POST', body: '{}' }).then((data) => applyIdeaLikePatch(post, data.ideas)).catch((error) => { serverState.textContent = error.message; });
+    const wasLiked = button.classList.contains('liked');
+    const countEl = button.querySelector('b');
+    const previous = Number((countEl && countEl.textContent) || 0);
+    const sign = button.querySelector('span');
+    // 乐观更新
+    button.classList.toggle('liked', !wasLiked);
+    if (sign) sign.textContent = !wasLiked ? '♥' : '♡';
+    if (countEl) countEl.textContent = String(wasLiked ? Math.max(0, previous - 1) : previous + 1);
+    button.classList.remove('pop');
+    void button.offsetWidth;
+    button.classList.add('pop');
+    api(`/api/ideas/${post.dataset.ideaId}/like`, { method: 'POST', body: '{}' }).then((data) => applyIdeaLikePatch(post, data.ideas)).catch((error) => {
+      button.classList.toggle('liked', wasLiked);
+      if (sign) sign.textContent = wasLiked ? '♥' : '♡';
+      if (countEl) countEl.textContent = String(previous);
+      serverState.textContent = error.message;
+    });
   }));
   root.querySelectorAll('.comment-toggle').forEach((button) => button.addEventListener('click', () => {
     const post = button.closest('.idea-post');
+    const id = Number(post.dataset.ideaId);
     const comments = post.querySelector('.comment-list');
-    comments.classList.toggle('visible');
-    if (!post.querySelector('.comment-form')) {
-      comments.insertAdjacentHTML('afterend', '<form class="comment-form"><input placeholder="以实名 ID 评论..." required><button type="submit">发送</button></form>');
-      post.querySelector('.comment-form').addEventListener('submit', (event) => {
-        event.preventDefault();
-        if (!requireLogin()) return;
-        if (!canWrite()) { serverState.textContent = '只读成员不能评论'; return; }
-        const input = event.currentTarget.querySelector('input');
-        const value = input.value.trim();
-        if (!value) return;
-        api(`/api/ideas/${post.dataset.ideaId}/comments`, { method: 'POST', body: JSON.stringify({ content: value }) }).then(() => refreshIdeas()).catch((error) => { serverState.textContent = error.message; });
-      });
+    const show = !comments.classList.contains('visible');
+    comments.classList.toggle('visible', show);
+    if (show) {
+      expandedIdeaIds.add(id);
+      ensureCommentComposer(post);
+    } else {
+      expandedIdeaIds.delete(id);
     }
   }));
 }
@@ -638,7 +776,15 @@ if (ideaForm) {
       pendingImage = '';
       composerPreview.innerHTML = '';
       composerPreview.style.display = 'none';
+      toast('动态已发布', 'success');
     }).catch((error) => { serverState.textContent = error.message; });
+  });
+  const ideaContentInput = document.querySelector('#idea-content');
+  ideaContentInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      ideaForm.requestSubmit();
+    }
   });
 }
 
@@ -931,6 +1077,7 @@ async function uploadAssets(files) {
     }
   }
   uploadState.textContent = failed ? `完成：成功 ${ok} 个，失败 ${failed} 个` : `完成：已上传 ${ok} 个资产`;
+  toast(failed ? `上传完成：成功 ${ok} 个，失败 ${failed} 个` : `已上传 ${ok} 个资产`, failed ? 'error' : 'success');
   setTimeout(() => { uploadState.textContent = ''; }, 4000);
   await loadAssets();
   refreshOverview();
@@ -1107,6 +1254,7 @@ function duplicateActiveDocument() {
   const category = activeDocument.category;
   api(`/api/documents/${activeDocument.id}/duplicate`, { method: 'POST', body: '{}' }).then((data) => {
     saveState.textContent = '已创建副本';
+    toast('已创建副本并打开', 'success');
     openDocument(data.id, category);
   }).catch((error) => { saveState.textContent = error.message; });
 }
@@ -1124,6 +1272,7 @@ function exportActiveDocument() {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 2000);
     saveState.textContent = '已导出 TXT';
+    toast('已导出 TXT 文件', 'success');
   }).catch((error) => { saveState.textContent = error.message; });
 }
 
@@ -1136,6 +1285,7 @@ function deleteActiveDocument() {
   const category = activeDocument.category;
   api(`/api/documents/${activeDocument.id}`, { method: 'DELETE' }).then(() => {
     saveState.textContent = '文档已删除';
+    toast('文档已删除', 'success');
     leaveDocumentEditor(category);
     refreshOverview();
   }).catch((error) => { saveState.textContent = error.message; });
@@ -1184,7 +1334,69 @@ document.querySelectorAll('[data-command]').forEach((button) => button.addEventL
   if (!activeDocumentEditor) return;
   document.execCommand(button.dataset.command, false, button.dataset.value || null);
   activeDocumentEditor.focus();
+  setTimeout(updateEditorFormatButtons, 0);
 }));
+document.querySelector('[data-share]')?.addEventListener('click', () => {
+  const url = window.location.href;
+  const done = () => toast('已复制当前页面链接，发给队友即可打开工作台', 'success');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(() => fallbackCopy(url, done));
+  } else {
+    fallbackCopy(url, done);
+  }
+});
+function fallbackCopy(text, done) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  try {
+    document.execCommand('copy');
+    done();
+  } catch (error) {
+    toast('复制失败，请手动复制地址栏链接', 'error');
+  }
+  area.remove();
+}
+
+/* ---- 编辑器快捷键与格式状态 ---- */
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  const key = event.key.toLowerCase();
+  if (key === 's' && activeDocument && activeDocumentEditor && canWrite() && !docConflict) {
+    event.preventDefault();
+    clearTimeout(documentSaveTimer);
+    saveActiveDocument();
+  }
+});
+const editorFormatCommands = ['bold', 'italic', 'insertUnorderedList'];
+function updateEditorFormatButtons() {
+  const editor = activeDocumentEditor;
+  if (!editor) return;
+  const shell = editor.closest('.document-editor');
+  if (!shell) return;
+  shell.querySelectorAll('[data-command]').forEach((button) => {
+    const command = button.dataset.command;
+    const value = button.dataset.value || '';
+    let active = false;
+    try {
+      if (command === 'formatBlock' && value.startsWith('h')) {
+        const current = String(document.queryCommandValue('formatBlock') || '').replace(/[<>]/g, '').toLowerCase();
+        active = current === value || current === `h${value.slice(1)}`;
+      } else if (command === 'bold' || command === 'italic' || command === 'insertUnorderedList') {
+        active = document.queryCommandState(command);
+      }
+    } catch (error) {
+      active = false;
+    }
+    button.classList.toggle('active', active);
+  });
+}
+document.addEventListener('selectionchange', () => {
+  if (activeDocumentEditor && document.activeElement && document.activeElement.isContentEditable) updateEditorFormatButtons();
+});
 let savedDocRange = null;
 document.addEventListener('selectionchange', () => {
   if (!activeDocumentEditor) return;
@@ -1290,7 +1502,14 @@ document.querySelector('#new-document-form').addEventListener('submit', (event) 
 function miniAvatarHTML(name, avatar) {
   const label = escapeHtml(name || '?');
   if (avatar) return `<span class="avatar-mini custom-avatar"><img src="${escapeHtml(avatar)}" alt="${label} 的头像"></span>`;
-  return `<span class="avatar-mini avatar-placeholder">${label.slice(0, 1)}</span>`;
+  return `<span class="avatar-mini avatar-placeholder" style="--hue:${nameHue(name)}">${escapeHtml((name || '?').slice(0, 1).toUpperCase())}</span>`;
+}
+
+function memberAvatarShell(member, wrapClass) {
+  const name = member.real_id || member.name || '?';
+  const label = escapeHtml(name);
+  if (member.avatar) return `<div class="${wrapClass} custom-avatar"><img src="${escapeHtml(member.avatar)}" alt="${label} 的头像"></div>`;
+  return `<div class="${wrapClass} avatar-placeholder" style="--hue:${nameHue(name)}"><span>${escapeHtml(name.slice(0, 1).toUpperCase())}</span></div>`;
 }
 
 function refreshOverview() {
@@ -1348,15 +1567,15 @@ function renderOverview(data) {
   const sections = [];
   if (ideas.length) {
     sections.push(`<li class="ov-group"><span>最近创意</span><b>${ideas.length}</b></li>`);
-    ideas.forEach((item) => sections.push(`<li class="ov-item" data-jump-ideas>${miniAvatarHTML(item.name, item.avatar)}<div class="ov-item-body"><p><strong>${escapeHtml(item.name)}</strong><span class="ov-item-time">${formatDocumentTime(item.created_at)}</span></p><p class="ov-item-text">${escapeHtml(item.content)}</p><small>${item.idea_type === 'concept' ? '概念创意' : '玩法创意'} · ♥ ${item.likes} · ${item.comments} 条评论</small></div></li>`));
+    ideas.forEach((item) => sections.push(`<li class="ov-item" data-jump-ideas>${miniAvatarHTML(item.name, item.avatar)}<div class="ov-item-body"><p><strong>${escapeHtml(item.name)}</strong>${relTimeMarkup(item.created_at, 'ov-item-time')}</p><p class="ov-item-text">${escapeHtml(item.content)}</p><small>${item.idea_type === 'concept' ? '概念创意' : '玩法创意'} · ♥ ${item.likes} · ${item.comments} 条评论</small></div></li>`));
   }
   if (docs.length) {
     sections.push(`<li class="ov-group"><span>最近文档</span><b>${docs.length}</b></li>`);
-    docs.forEach((item) => sections.push(`<li class="ov-item" data-open-doc="${item.id}" data-doc-category="${item.category}"><span class="ov-icon">▤</span><div class="ov-item-body"><p><strong>${escapeHtml(item.title)}</strong><span class="ov-item-time">${formatDocumentTime(item.updated_at)}</span></p><small>${item.category === 'environment' ? '环境安装指南' : '策划文档'} · ${escapeHtml(item.updated_by || item.author)} 最近修改</small></div></li>`));
+    docs.forEach((item) => sections.push(`<li class="ov-item" data-open-doc="${item.id}" data-doc-category="${item.category}"><span class="ov-icon">▤</span><div class="ov-item-body"><p><strong>${escapeHtml(item.title)}</strong>${relTimeMarkup(item.updated_at, 'ov-item-time')}</p><small>${item.category === 'environment' ? '环境安装指南' : '策划文档'} · ${escapeHtml(item.updated_by || item.author)} 最近修改</small></div></li>`));
   }
   if (recentTasks.length) {
     sections.push(`<li class="ov-group"><span>最近任务</span><b>${recentTasks.length}</b></li>`);
-    recentTasks.forEach((item) => sections.push(`<li class="ov-item" data-jump-tasks><span class="ov-icon">✓</span><div class="ov-item-body"><p><strong>${escapeHtml(item.title)}</strong><span class="ov-item-time">${formatDocumentTime(item.updated_at)}</span></p><small>${taskLabels[item.priority]}优先级 · ${taskLabels[item.task_type] || item.task_type} · ${escapeHtml(item.assignee || '未指派')}</small></div></li>`));
+    recentTasks.forEach((item) => sections.push(`<li class="ov-item" data-jump-tasks><span class="ov-icon">✓</span><div class="ov-item-body"><p><strong>${escapeHtml(item.title)}</strong>${relTimeMarkup(item.updated_at, 'ov-item-time')}</p><small>${taskLabels[item.priority]}优先级 · ${taskLabels[item.task_type] || item.task_type} · ${escapeHtml(item.assignee || '未指派')}</small></div></li>`));
   }
   activity.innerHTML = sections.join('') || '';
   document.querySelector('#overview-activity-empty').hidden = Boolean(sections.length);

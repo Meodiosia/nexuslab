@@ -211,3 +211,21 @@ body>footer{background:#090b12;color:#747a87}
 .invite-code-row code{font:500 14px var(--mono);letter-spacing:.12em;color:#4a5318;background:#f1f5dc;border:1px dashed #9db92e;padding:6px 10px}
 .invite-code-row button{border:1px solid #d7d8d1;background:#f6f5f0;font-size:8px;padding:5px 9px;cursor:pointer}
 .invite-field{margin-top:10px}
+
+/* toasts */
+#toast-stack{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:400;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.toast{background:#20231f;color:#f4f5ef;font-size:11px;padding:9px 17px;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;transform:translateY(10px);transition:opacity .22s,transform .22s;max-width:80vw}
+.toast.show{opacity:1;transform:none}
+.toast-success{background:#2f4a27;border-left:3px solid #a8cf4b}
+.toast-error{background:#542221;border-left:3px solid #e07a7a}
+/* avatar placeholder: initial letter + stable hue */
+.avatar-placeholder{--hue:215;background:hsl(var(--hue),30%,54%);display:grid;place-items:center;color:#fff;font-weight:600}
+.avatar-placeholder span{color:#fff;line-height:1}
+.avatar-mini.avatar-placeholder{background:hsl(var(--hue),30%,54%);color:#fff;font:600 9px var(--mono);text-transform:uppercase}
+.online-stack .presence-chip{--hue:215;background:hsl(var(--hue),34%,52%);color:#fff;font-style:normal}
+/* like pop animation */
+.like-button.pop span{display:inline-block;animation:like-pop .35s ease}
+@keyframes like-pop{0%{transform:scale(1)}40%{transform:scale(1.55)}100%{transform:scale(1)}}
+/* editor format buttons active state */
+.doc-toolbar [data-command].active{background:#e6ecc6;color:#4a5318;box-shadow:inset 0 -1px 0 #9db92e}
+time.reltime{white-space:nowrap}
