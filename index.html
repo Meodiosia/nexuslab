@@ -151,29 +151,29 @@
 
         <div class="workspace-view document-view" data-view-panel="document">
           <div class="document-library" data-document-category="planning">
-            <div class="board-heading"><div><p>PLANNING LIBRARY</p><h2>策划文档</h2></div><button class="add-task" type="button" data-new-document="planning">+ 新增文档</button></div>
+            <div class="board-heading"><div><p>PLANNING LIBRARY</p><h2>策划文档</h2></div><input class="doc-search" data-doc-search="planning" type="search" placeholder="搜索文档标题或作者…"><button class="add-task" type="button" data-new-document="planning">+ 新增文档</button></div>
             <div class="document-list" data-document-list="planning"><div class="document-empty">还没有策划文档</div></div>
           </div>
           <div class="document-editor" hidden>
-            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 文档库</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span id="document-save-state">尚未保存</span></div>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 文档库</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span id="document-save-state">尚未保存</span></div>
             <div class="document-layout"><article class="editor-page" id="editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div id="document-history-list"></div></aside></div>
           </div>
         </div>
 
         <div class="workspace-view environment-view" data-view-panel="environment">
           <div class="document-library" data-document-category="environment">
-            <div class="board-heading"><div><p>ONBOARDING GUIDE</p><h2>环境安装</h2><span>给新成员阅读的工具、依赖与项目启动说明。</span></div><button class="add-task" type="button" data-new-document="environment">+ 新增指南</button></div>
+            <div class="board-heading"><div><p>ONBOARDING GUIDE</p><h2>环境安装</h2><span>给新成员阅读的工具、依赖与项目启动说明。</span></div><input class="doc-search" data-doc-search="environment" type="search" placeholder="搜索指南标题或作者…"><button class="add-task" type="button" data-new-document="environment">+ 新增指南</button></div>
             <div class="document-list" data-document-list="environment"><div class="document-empty">还没有环境安装指南</div></div>
           </div>
           <div class="document-editor" hidden>
-            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 指南列表</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="document-save-state">尚未保存</span></div>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 指南列表</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="document-save-state">尚未保存</span></div>
             <div class="document-layout"><article class="editor-page environment-editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div class="document-history-list"></div></aside></div>
           </div>
         </div>
 
         <div class="workspace-view" data-view-panel="tasks">
           <div class="board-heading"><div><p>TEAM DELIVERY</p><h2>任务看板</h2></div><button class="add-task" type="button" data-new-task>+ 新建任务</button></div>
-          <div class="task-filter-bar"><select id="task-filter-type"><option value="all">全部类型</option><option value="planning">策划</option><option value="art">美术</option><option value="programming">程序</option><option value="audio">音效</option><option value="other">其他</option></select><select id="task-filter-assignee"><option value="all">全部指派人</option></select><select id="task-filter-priority"><option value="all">全部优先级</option><option value="urgent">紧急</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select><button type="button" id="task-clear-filters">清除筛选</button></div>
+          <div class="task-filter-bar"><input id="task-search" type="search" placeholder="搜索任务标题或描述…" aria-label="搜索任务"><select id="task-filter-type"><option value="all">全部类型</option><option value="planning">策划</option><option value="art">美术</option><option value="programming">程序</option><option value="audio">音效</option><option value="other">其他</option></select><select id="task-filter-assignee"><option value="all">全部指派人</option></select><select id="task-filter-priority"><option value="all">全部优先级</option><option value="urgent">紧急</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select><button type="button" id="task-clear-filters">清除筛选</button></div>
           <div class="kanban" id="kanban">
             <section data-task-status="todo"><header><span>待处理</span><b>0</b></header><div class="task-column"></div></section>
             <section data-task-status="in_progress"><header><span>进行中</span><b>0</b></header><div class="task-column"></div></section>
@@ -196,8 +196,9 @@
         <div class="workspace-view ideas-view" data-view-panel="ideas">
           <div class="ideas-heading"><div><p>OPEN SIGNALS</p><h2>创意中心</h2><span>把还没成形的想法丢进来。让团队帮它长出下一步。</span></div><div class="ideas-online">暂无在线状态</div></div>
           <form class="idea-composer" id="idea-form"><div class="composer-avatar avatar-placeholder"></div><div class="composer-main"><input id="idea-name" aria-label="实名 ID" placeholder="登录后显示 ID" readonly><div class="idea-type-picker"><label><input type="radio" name="idea-type" value="gameplay" checked><span>玩法创意</span></label><label><input type="radio" name="idea-type" value="concept"><span>概念创意</span></label></div><textarea id="idea-content" rows="3" placeholder="分享一个想法、灵感或正在尝试的方案..." required></textarea><div class="composer-preview" id="composer-preview"></div><div class="composer-actions"><label class="image-button" for="idea-image">▧ 添加图片<input id="idea-image" type="file" accept="image/*" hidden></label><span>所有成员可见 · 将显示实名 ID</span><button type="submit">发布动态 <b>↗</b></button></div></div></form>
-          <div class="idea-filter-bar"><div><span>筛选</span><select id="filter-member" aria-label="按成员筛选"><option value="all">全部成员</option></select><select id="filter-time" aria-label="按时间筛选"><option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option><option value="month">最近 30 天</option></select><select id="filter-type" aria-label="按类型筛选"><option value="all">全部类型</option><option value="gameplay">玩法创意</option><option value="concept">概念创意</option></select></div><button type="button" id="clear-filters">清除筛选</button></div>
+          <div class="idea-filter-bar"><div><input id="idea-search" type="search" placeholder="搜索动态内容或成员…" aria-label="搜索动态"><span>筛选</span><select id="filter-member" aria-label="按成员筛选"><option value="all">全部成员</option></select><select id="filter-time" aria-label="按时间筛选"><option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option><option value="month">最近 30 天</option></select><select id="filter-type" aria-label="按类型筛选"><option value="all">全部类型</option><option value="gameplay">玩法创意</option><option value="concept">概念创意</option></select></div><button type="button" id="clear-filters">清除筛选</button></div>
           <div class="idea-feed" id="idea-feed"><div class="feed-empty"><span>NO SIGNALS YET</span><h3>还没有人发布动态</h3><p>登录后发布第一条真实创意。</p></div></div>
+          <div class="feed-footer"><button type="button" id="idea-load-more" hidden>加载更多动态</button><small id="idea-feed-meta"></small></div>
         </div>
       </section>
     </div>
@@ -275,6 +276,7 @@
     </form>
   </dialog>
 
+  <input id="doc-image-input" type="file" accept="image/*" hidden>
   <script src="app.js"></script>
 </body>
 </html>

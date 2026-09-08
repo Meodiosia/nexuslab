@@ -8,6 +8,7 @@
 运行：python -m unittest discover -s tests -v
 """
 import base64
+import http.client
 import json
 import os
 import shutil
@@ -272,6 +273,215 @@ class NexusApiTest(unittest.TestCase):
         self.assertIn("hours", data)
         self.assertIsInstance(data["recent_documents"], list)
         self.assertTrue(any("task_type" in row for row in data["recent_tasks"]) or data["counts"]["tasks"] == 0, data)
+
+    # ---------- 创意分页 ----------
+    def test_ideas_pagination(self):
+        token = self.register("page_a")
+        status, before = self.request("GET", "/api/ideas?limit=100")
+        total_before = before["total"]
+        created = []
+        for i in range(3):
+            status, data = self.request("POST", "/api/ideas", {"content": "分页信号 %d" % i, "idea_type": "gameplay"}, token)
+            self.assertEqual(status, 200, data)
+            created.append(next(x for x in data["ideas"] if x["content"] == "分页信号 %d" % i)["id"])
+        status, data = self.request("GET", "/api/ideas?limit=2")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(len(data["ideas"]), 2, data)
+        self.assertEqual(data["total"], total_before + 3, data)
+        self.assertTrue(data["has_more"], data)
+        last_id = data["ideas"][-1]["id"]
+        status, data = self.request("GET", "/api/ideas?limit=2&before_id=%s" % last_id)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(len(data["ideas"]), total_before + 1, data)
+        self.assertFalse(data["has_more"], data)
+
+    # ---------- 文档插图：上传/净化放行/删除清理 ----------
+    def test_document_images(self):
+        token = self.register("docimg_a")
+        status, data = self.request("POST", "/api/docimages", {"data": PNG_URL}, token)
+        self.assertEqual(status, 201, data)
+        image_url = data.get("url", "")
+        self.assertTrue(image_url.startswith("/uploads/doc/"), data)
+        status, raw = self.request("GET", image_url)
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, PNG)
+        doc_id = self.create_document(token, "带图文档", "planning")
+        html = '<h2>看图</h2><img src="%s" onerror="alert(1)"><p onclick="x()">正文</p>' % image_url
+        status, data = self.request("PUT", "/api/documents/%s" % doc_id, {"title": "带图文档", "content": html}, token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/documents/%s" % doc_id)
+        content = data["document"]["content"]
+        self.assertIn('<img src="%s"' % image_url, content, content)
+        self.assertNotIn("onerror", content)
+        self.assertNotIn("onclick", content)
+        doc_dir = os.path.join(self.tmp, "uploads", "doc")
+        self.assertTrue(os.listdir(doc_dir), doc_dir)
+        status, data = self.request("DELETE", "/api/documents/%s" % doc_id, None, token)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(os.listdir(doc_dir), [], "删除文档后应清理插图文件")
+
+
+def _start_server(cls, tmp_prefix):
+    cls.tmp = tempfile.mkdtemp(prefix=tmp_prefix)
+    cls.port = free_port()
+    cls.base = "http://127.0.0.1:%d" % cls.port
+    cls.proc = subprocess.Popen(
+        [sys.executable, SERVER, "--port", str(cls.port),
+         "--db", os.path.join(cls.tmp, "test.db"),
+         "--uploads", os.path.join(cls.tmp, "uploads")],
+        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if cls.proc.poll() is not None:
+            raise RuntimeError("server exited early with code %s" % cls.proc.returncode)
+        try:
+            urllib.request.urlopen(cls.base + "/api/session", timeout=1).close()
+            return
+        except Exception:
+            time.sleep(0.2)
+    cls.proc.kill()
+    raise RuntimeError("server did not start in time")
+
+
+def _stop_server(cls):
+    if getattr(cls, "proc", None):
+        cls.proc.terminate()
+        try:
+            cls.proc.wait(timeout=5)
+        except Exception:
+            cls.proc.kill()
+    shutil.rmtree(getattr(cls, "tmp", ""), ignore_errors=True)
+
+
+class RealtimeRoleApiTest(unittest.TestCase):
+    """独立实例：验证角色管理与 SSE 实时事件（首个注册者为 admin）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _start_server(cls, "nexuslab_role_")
+
+    @classmethod
+    def tearDownClass(cls):
+        _stop_server(cls)
+
+    def request(self, method, path, payload=None, token=None):
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(self.base + path, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("X-Session", token)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    return resp.status, raw
+        except urllib.error.HTTPError as err:
+            raw = err.read()
+            try:
+                return err.code, json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return err.code, raw
+
+    def register(self, real_id):
+        status, data = self.request("POST", "/api/register", {"real_id": real_id, "password": "pass123456", "bio": "测试"})
+        self.assertEqual(status, 201, data)
+        return data["token"], data["member"]
+
+    def open_sse(self, token):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/stream?token=" + token)
+        return conn, conn.getresponse()
+
+    def read_sse_event(self, resp, match, seconds=8):
+        """从已打开的 SSE 响应流读取事件，直到 JSON 满足 match 谓词。"""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                line = resp.readline()
+            except (socket.timeout, OSError):
+                break
+            if not line:
+                break
+            text = line.decode("utf-8", "replace").strip()
+            if not text.startswith("data: "):
+                continue
+            try:
+                event = json.loads(text[6:])
+            except ValueError:
+                continue
+            if match(event):
+                return event
+        raise AssertionError("SSE 超时未收到匹配事件")
+
+    def test_roles_management(self):
+        admin_token, admin = self.register("r_admin")
+        self.assertEqual(admin["role"], "admin", admin)
+        member_token, member = self.register("r_member")
+        self.assertEqual(member["role"], "member", member)
+        viewer_token, viewer = self.register("r_viewer")
+        # viewer（注册即为 member）先由管理员降级，验证只读拦截
+        status, data = self.request("POST", "/api/members/%s/role" % member["id"], {"role": "viewer"}, admin_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("POST", "/api/members/%s/role" % viewer["id"], {"role": "viewer"}, admin_token)
+        self.assertEqual(status, 200, data)
+        # viewer 禁止写操作（即使 token 原本来自已降级成员）
+        payload_task = {"title": "x", "description": "", "task_type": "planning", "priority": "low",
+                        "status": "todo", "assignee_id": "", "estimated_hours": "", "due_date": ""}
+        status, data = self.request("POST", "/api/tasks", payload_task, member_token)
+        self.assertEqual(status, 403, data)
+        status, data = self.request("POST", "/api/tasks", payload_task, viewer_token)
+        self.assertEqual(status, 403, data)
+        status, data = self.request("PUT", "/api/tasks/1", {"status": "done"}, viewer_token)
+        self.assertEqual(status, 403, data)
+        status, data = self.request("POST", "/api/documents", {"title": "只读不该发", "category": "planning"}, viewer_token)
+        self.assertEqual(status, 403, data)
+        # viewer 无权改角色；admin 可把 member 恢复为 member
+        status, data = self.request("POST", "/api/members/%s/role" % admin["id"], {"role": "viewer"}, viewer_token)
+        self.assertEqual(status, 403, data)
+        status, data = self.request("POST", "/api/members/%s/role" % member["id"], {"role": "member"}, admin_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("POST", "/api/tasks", payload_task, member_token)
+        self.assertEqual(status, 201, data)
+        task_id = data["id"]
+        # 最后一名管理员不能降级/移除自己
+        status, data = self.request("POST", "/api/members/%s/role" % admin["id"], {"role": "member"}, admin_token)
+        self.assertEqual(status, 400, data)
+        status, data = self.request("DELETE", "/api/members/%s" % admin["id"], None, admin_token)
+        self.assertEqual(status, 400, data)
+        # 移除仍有任务的成员 -> 409；无内容成员可移除
+        status, data = self.request("DELETE", "/api/members/%s" % member["id"], None, admin_token)
+        self.assertEqual(status, 409, data)
+        status, data = self.request("DELETE", "/api/members/%s" % viewer["id"], None, admin_token)
+        self.assertEqual(status, 200, data)
+        # 清理任务后 member 可被移除
+        status, data = self.request("DELETE", "/api/tasks/%s" % task_id, None, member_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("DELETE", "/api/members/%s" % member["id"], None, admin_token)
+        self.assertEqual(status, 200, data)
+
+    def test_sse_realtime(self):
+        admin_token, _ = self.register("sse_admin")
+        other_token, _ = self.register("sse_other")
+        conn_a, resp_a = self.open_sse(admin_token)
+        presence = self.read_sse_event(resp_a, lambda e: e.get("type") == "presence", seconds=5)
+        self.assertTrue(any(m["real_id"] == "sse_admin" for m in presence["data"].get("online", [])), presence)
+        # 第二个成员上线后广播 presence，管理员应看到其在线
+        conn_b, resp_b = self.open_sse(other_token)
+        seen = self.read_sse_event(resp_a, lambda e: e.get("type") == "presence"
+                                   and any(m["real_id"] == "sse_other" for m in e["data"].get("online", [])), seconds=8)
+        self.assertTrue(seen)
+        seen_b = self.read_sse_event(resp_b, lambda e: e.get("type") == "presence", seconds=8)
+        self.assertTrue(any(m["real_id"] == "sse_other" for m in seen_b["data"].get("online", [])), seen_b)
+        # 其他成员发布动态 -> 管理员实时收到 idea 事件
+        status, data = self.request("POST", "/api/ideas", {"content": "实时信号", "idea_type": "gameplay"}, other_token)
+        self.assertEqual(status, 200, data)
+        event = self.read_sse_event(resp_a, lambda e: e.get("type") == "idea", seconds=8)
+        self.assertEqual(event["data"]["action"], "new", event)
+        conn_a.close()
+        conn_b.close()
 
 
 if __name__ == "__main__":

@@ -6,10 +6,13 @@ import hashlib
 import hmac
 import mimetypes
 import os
+import queue
 import re
 import secrets
 import sqlite3
 import sys
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,6 +36,8 @@ IMAGE_EXT = {
 }
 ASSET_CATEGORIES = ("visual", "audio", "build", "other")
 ASSET_DIR = os.path.join(UPLOAD_DIR, "assets")
+DOC_IMG_DIR = os.path.join(UPLOAD_DIR, "doc")
+MAX_DOC_IMAGE_BYTES = 5 * 1024 * 1024  # 文档内插图
 ASSET_DANGEROUS_MIME = {
     "image/svg+xml", "text/html", "application/xhtml+xml",
     "application/javascript", "text/javascript", "application/xml", "text/xml",
@@ -48,6 +53,72 @@ ASSET_MIME_EXT = {
 }
 SESSIONS = {}
 
+# ---- 角色 ----
+ROLES = ("admin", "member", "viewer")
+ROLE_LABELS = {"admin": "管理员", "member": "成员", "viewer": "只读成员"}
+
+# ---- SSE 实时事件中心 ----
+_PRESENCE_TTL = 90  # 秒；超过视为离线
+_EVENT_LOCK = threading.Lock()
+_SUBSCRIBERS = []  # [{"member_id": int, "queue": queue.Queue}, ...]
+_PRESENCE = {}     # member_id -> time.monotonic()
+
+
+def subscribe_stream(member_id):
+    stream_queue = queue.Queue(maxsize=500)
+    with _EVENT_LOCK:
+        _SUBSCRIBERS.append({"member_id": member_id, "queue": stream_queue})
+        _PRESENCE[member_id] = time.monotonic()
+    return stream_queue
+
+
+def unsubscribe_stream(stream_queue):
+    with _EVENT_LOCK:
+        _SUBSCRIBERS[:] = [item for item in _SUBSCRIBERS if item["queue"] is not stream_queue]
+    push_presence()
+
+
+def _event_lines(payload):
+    return ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
+def broadcast(event_type, data=None):
+    line = _event_lines({"type": event_type, "data": data})
+    with _EVENT_LOCK:
+        for item in _SUBSCRIBERS:
+            try:
+                item["queue"].put_nowait(line)
+            except queue.Full:
+                pass
+
+
+def touch_presence(member_id):
+    with _EVENT_LOCK:
+        _PRESENCE[member_id] = time.monotonic()
+
+
+def _online_member_ids():
+    now = time.monotonic()
+    with _EVENT_LOCK:
+        ids = [member_id for member_id, last in _PRESENCE.items() if now - last < _PRESENCE_TTL]
+    return ids
+
+
+def push_presence():
+    ids = _online_member_ids()
+    if not ids:
+        broadcast("presence", {"online": [], "online_ids": []})
+        return
+    placeholders = ",".join("?" * len(ids))
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT id, real_id, avatar, role FROM members WHERE id IN (%s) ORDER BY id ASC" % placeholders, ids
+        ).fetchall()
+    online = [dict(row) for row in rows]
+    for item in online:
+        item["avatar"] = item.get("avatar") or ""
+    broadcast("presence", {"online": online, "online_ids": [item["id"] for item in online]})
+
 
 def hash_password(password, salt=None):
     salt_bytes = bytes.fromhex(salt) if salt else secrets.token_bytes(16)
@@ -56,7 +127,13 @@ def hash_password(password, salt=None):
 
 
 def public_member(row):
-    return {"id": row["id"], "real_id": row["real_id"], "avatar": row["avatar"] or "", "bio": row["bio"] or ""}
+    return {
+        "id": row["id"],
+        "real_id": row["real_id"],
+        "avatar": row["avatar"] or "",
+        "bio": row["bio"] or "",
+        "role": row["role"] if "role" in row.keys() else "member",
+    }
 
 
 def db():
@@ -80,6 +157,7 @@ def init_db():
             bio TEXT,
             password_hash TEXT,
             password_salt TEXT,
+            role TEXT NOT NULL DEFAULT 'member',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS ideas (
@@ -181,6 +259,12 @@ def init_db():
         connection.execute("ALTER TABLE members ADD COLUMN password_hash TEXT")
     if "password_salt" not in columns:
         connection.execute("ALTER TABLE members ADD COLUMN password_salt TEXT")
+    if "role" not in columns:
+        connection.execute("ALTER TABLE members ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
+    if not connection.execute("SELECT 1 FROM members WHERE role = 'admin'").fetchone():
+        row = connection.execute("SELECT MIN(id) AS id FROM members").fetchone()
+        if row and row["id"] is not None:
+            connection.execute("UPDATE members SET role = 'admin' WHERE id = ?", (row["id"],))
     idea_columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)").fetchall()}
     if "idea_type" not in idea_columns:
         connection.execute("ALTER TABLE ideas ADD COLUMN idea_type TEXT NOT NULL DEFAULT 'gameplay'")
@@ -211,6 +295,13 @@ ALLOWED_ATTRS = {
 }
 
 
+def _safe_img_src(value):
+    value = (value or "").strip()
+    if value.startswith("/uploads/"):
+        return bool(re.fullmatch(r"/uploads/[A-Za-z0-9._/\-]+", value))
+    return bool(re.match(r"^data:image/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$", value))
+
+
 class _SanitizeParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -232,6 +323,21 @@ class _SanitizeParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
+        if tag == "img":
+            src = None
+            alt = ""
+            for raw_name, value in attrs:
+                if raw_name.lower() == "src":
+                    src = value
+                elif raw_name.lower() == "alt":
+                    alt = value or ""
+            if not _safe_img_src(src):
+                return
+            out = '<img src="%s"' % html.escape(src.strip(), quote=True)
+            if alt:
+                out += ' alt="%s"' % html.escape(alt, quote=True)
+            self.buffer.append(out + ">")
+            return
         if tag not in ALLOWED_TAGS:
             return
         self.buffer.append("<" + tag)
@@ -429,12 +535,14 @@ def rollback_document(connection, document_id, history_id, member_id):
         "UPDATE documents SET title = ?, content = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (title, content, member_id, document_id),
     )
+    category_row = connection.execute("SELECT category FROM documents WHERE id = ?", (document_id,)).fetchone()
     connection.execute(
         "INSERT INTO document_history (document_id, member_id, action, title, content) VALUES (?, ?, ?, ?, ?)",
         (document_id, member_id, "回滚到历史版本", title, content),
     )
     prune_document_history(connection, document_id)
     connection.commit()
+    broadcast("doc", {"action": "update", "id": document_id, "category": category_row["category"] if category_row else "planning"})
     return {"ok": True, "document_id": document_id, "restored_history_id": entry["id"]}, 200, None
 
 
@@ -624,6 +732,46 @@ def remove_asset_file(stored_name):
 
 
 # --------------------------------------------------------------------------
+# 文档内插图：dataURL -> uploads/doc/ 磁盘文件
+# --------------------------------------------------------------------------
+def save_doc_image(data_url):
+    if not data_url.startswith("data:image/"):
+        raise ValueError("图片格式无效")
+    try:
+        header, encoded = data_url.split(",", 1)
+        mime = header[5:].split(";", 1)[0].strip().lower()
+        extension = IMAGE_EXT.get(mime)
+        if not extension:
+            raise ValueError("仅支持 PNG、JPG、GIF、WebP 图片")
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise ValueError("图片格式无效")
+    if len(raw) > MAX_DOC_IMAGE_BYTES:
+        raise ValueError("图片不能超过 5 MB")
+    os.makedirs(DOC_IMG_DIR, exist_ok=True)
+    stored_name = secrets.token_hex(12) + extension
+    with open(os.path.join(DOC_IMG_DIR, stored_name), "wb") as file:
+        file.write(raw)
+    return "/uploads/doc/" + stored_name
+
+
+def remove_doc_file(url):
+    if not url or not url.startswith("/uploads/doc/"):
+        return
+    try:
+        path = os.path.abspath(os.path.join(DOC_IMG_DIR, os.path.basename(url)))
+        if path.startswith(os.path.abspath(DOC_IMG_DIR)) and os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def remove_doc_images_from_html(content):
+    for url in re.findall(r"/uploads/doc/[A-Za-z0-9._-]+", content or ""):
+        remove_doc_file(url)
+
+
+# --------------------------------------------------------------------------
 # 会话过期
 # --------------------------------------------------------------------------
 def session_expired(created_at):
@@ -643,15 +791,26 @@ def purge_expired_sessions():
         pass
 
 
-def idea_rows(connection, current_member):
+def idea_rows(connection, current_member, before_id=None, limit=None):
+    where = ""
+    params = []
+    if before_id is not None:
+        where = "WHERE ideas.id < ?"
+        params.append(before_id)
+    limit_sql = ""
+    if limit is not None:
+        limit_sql = "LIMIT ?"
+        params.append(limit)
     rows = connection.execute("""
         SELECT ideas.id, ideas.member_id, ideas.content, ideas.image, ideas.idea_type, ideas.created_at, members.real_id, members.avatar,
           (SELECT COUNT(*) FROM likes WHERE idea_id = ideas.id) AS likes,
           (SELECT COUNT(*) FROM comments WHERE idea_id = ideas.id) AS comments,
           EXISTS(SELECT 1 FROM likes WHERE idea_id = ideas.id AND member_id = ?) AS liked
         FROM ideas JOIN members ON members.id = ideas.member_id
+        %s
         ORDER BY ideas.created_at DESC, ideas.id DESC
-    """, (current_member,)).fetchall()
+        %s
+    """ % (where, limit_sql), [current_member] + params).fetchall()
     result = []
     for row in rows:
         comments = connection.execute("""
@@ -699,19 +858,75 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return member_id
 
+    def member_role(self, member_id):
+        with db() as connection:
+            row = connection.execute("SELECT role FROM members WHERE id = ?", (member_id,)).fetchone()
+        return row["role"] if row else "member"
+
+    def require_writer(self, member_id):
+        """viewer（只读）成员禁止一切写操作。"""
+        if self.member_role(member_id) == "viewer":
+            self.json_response({"error": "只读成员不能修改内容"}, 403)
+            return False
+        return True
+
+    def require_admin(self, member_id):
+        if self.member_role(member_id) != "admin":
+            self.json_response({"error": "仅管理员可执行此操作"}, 403)
+            return False
+        return True
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/api/stream":
+            token = parse_qs(parsed.query).get("token", [""])[0]
+            member_id = SESSIONS.get(token)
+            if token and not member_id:
+                with db() as connection:
+                    row = connection.execute("SELECT member_id, created_at FROM sessions WHERE token = ?", (token,)).fetchone()
+                if row and not session_expired(row["created_at"]):
+                    member_id = row["member_id"]
+                    SESSIONS[token] = member_id
+            if not member_id:
+                return self.json_response({"error": "请先登录"}, 401)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            stream_queue = subscribe_stream(member_id)
+            push_presence()
+            try:
+                while True:
+                    try:
+                        line = stream_queue.get(timeout=20)
+                    except queue.Empty:
+                        touch_presence(member_id)
+                        try:
+                            self.wfile.write(b": ping\n\n")
+                            self.wfile.flush()
+                        except OSError:
+                            break
+                        continue
+                    self.wfile.write(line)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                unsubscribe_stream(stream_queue)
+            return
         if path == "/api/session":
             member_id = self.member(False)
             if not member_id:
                 return self.json_response({"member": None})
             with db() as connection:
-                row = connection.execute("SELECT id, real_id, avatar, bio FROM members WHERE id = ?", (member_id,)).fetchone()
+                row = connection.execute("SELECT id, real_id, avatar, bio, role FROM members WHERE id = ?", (member_id,)).fetchone()
             return self.json_response({"member": public_member(row) if row else None})
         if path == "/api/members":
             with db() as connection:
-                rows = connection.execute("SELECT id, real_id, avatar, bio FROM members ORDER BY id ASC").fetchall()
+                rows = connection.execute("SELECT id, real_id, avatar, bio, role FROM members ORDER BY id ASC").fetchall()
             return self.json_response({"members": [public_member(row) for row in rows]})
         if path == "/api/project":
             with db() as connection:
@@ -719,8 +934,33 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"project": dict(row) if row else {"name": "", "icon": "", "updated_at": None}})
         if path == "/api/ideas":
             member_id = self.member(False) or 0
+            query_params = parse_qs(parsed.query)
+            before_raw = query_params.get("before_id", [None])[0]
+            limit_raw = query_params.get("limit", [None])[0]
+            try:
+                page_size = max(1, min(int(limit_raw), 100)) if limit_raw else 50
+            except ValueError:
+                page_size = 50
+            try:
+                before_id = int(before_raw) if before_raw else None
+            except ValueError:
+                before_id = None
             with db() as connection:
-                return self.json_response({"ideas": idea_rows(connection, member_id)})
+                total = connection.execute("SELECT COUNT(*) FROM ideas").fetchone()[0]
+                items = idea_rows(connection, member_id, before_id=before_id, limit=page_size)
+                has_more = False
+                if items:
+                    if before_id is not None:
+                        tail = connection.execute(
+                            "SELECT 1 FROM ideas WHERE id < ? ORDER BY id DESC LIMIT 1",
+                            (items[-1]["id"],),
+                        ).fetchone()
+                        has_more = tail is not None
+                    else:
+                        has_more = total > len(items)
+                else:
+                    has_more = total > 0 and before_id is None
+            return self.json_response({"ideas": items, "total": total, "has_more": has_more})
         if path == "/api/tasks":
             with db() as connection:
                 rows = connection.execute("""
@@ -914,6 +1154,33 @@ class Handler(BaseHTTPRequestHandler):
                     connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
                     connection.commit()
             return self.json_response({"ok": True})
+        role_parts = path.strip("/").split("/")
+        if len(role_parts) == 4 and role_parts[0] == "api" and role_parts[1] == "members" and role_parts[3] == "role":
+            admin_id = self.member()
+            if not admin_id:
+                return
+            if not self.require_admin(admin_id):
+                return
+            try:
+                target_id = int(role_parts[2])
+            except ValueError:
+                return self.json_response({"error": "成员不存在"}, 404)
+            role = str(payload.get("role", ""))
+            if role not in ROLES:
+                return self.json_response({"error": "角色无效"}, 400)
+            with db() as connection:
+                target = connection.execute("SELECT id, real_id, role FROM members WHERE id = ?", (target_id,)).fetchone()
+                if not target:
+                    return self.json_response({"error": "成员不存在"}, 404)
+                if role != "admin":
+                    admin_count = connection.execute("SELECT COUNT(*) FROM members WHERE role = 'admin'").fetchone()[0]
+                    if target["role"] == "admin" and admin_count <= 1:
+                        return self.json_response({"error": "必须至少保留一名管理员"}, 400)
+                connection.execute("UPDATE members SET role = ? WHERE id = ?", (role, target_id))
+                connection.commit()
+                row = connection.execute("SELECT id, real_id, avatar, bio, role FROM members WHERE id = ?", (target_id,)).fetchone()
+            broadcast("member", {"action": "updated", "member": public_member(row)})
+            return self.json_response({"member": public_member(row)})
         if path == "/api/login":
             real_id = str(payload.get("real_id", "")).strip()
             password = str(payload.get("password", ""))
@@ -947,19 +1214,28 @@ class Handler(BaseHTTPRequestHandler):
                 existing = connection.execute("SELECT id, password_hash FROM members WHERE real_id = ?", (real_id,)).fetchone()
                 if existing and existing["password_hash"]:
                     return self.json_response({"error": "该名称 ID 已被注册"}, 409)
+                total_before = connection.execute("SELECT COUNT(*) FROM members").fetchone()[0]
                 if existing:
                     member_id = existing["id"]
-                    connection.execute("UPDATE members SET password_hash = ?, password_salt = ?, bio = ? WHERE id = ?", (password_hash, salt, bio, member_id))
+                    connection.execute(
+                        "UPDATE members SET password_hash = ?, password_salt = ?, bio = ? WHERE id = ?",
+                        (password_hash, salt, bio, member_id),
+                    )
                 else:
-                    cursor = connection.execute("INSERT INTO members (real_id, bio, password_hash, password_salt) VALUES (?, ?, ?, ?)", (real_id, bio, password_hash, salt))
+                    new_role = "admin" if total_before == 0 else "member"
+                    cursor = connection.execute(
+                        "INSERT INTO members (real_id, bio, password_hash, password_salt, role) VALUES (?, ?, ?, ?, ?)",
+                        (real_id, bio, password_hash, salt, new_role),
+                    )
                     member_id = cursor.lastrowid
                 connection.commit()
-                member = connection.execute("SELECT id, real_id, avatar, bio FROM members WHERE id = ?", (member_id,)).fetchone()
+                member = connection.execute("SELECT id, real_id, avatar, bio, role FROM members WHERE id = ?", (member_id,)).fetchone()
             token = secrets.token_urlsafe(24)
             SESSIONS[token] = member_id
             with db() as connection:
                 connection.execute("INSERT INTO sessions (token, member_id) VALUES (?, ?)", (token, member_id))
                 connection.commit()
+            broadcast("member", {"action": "joined", "member": public_member(member)})
             return self.json_response({"member": public_member(member), "token": token}, 201)
         if path == "/api/profile":
             member_id = self.member()
@@ -975,14 +1251,28 @@ class Handler(BaseHTTPRequestHandler):
             with db() as connection:
                 old = connection.execute("SELECT avatar FROM members WHERE id = ?", (member_id,)).fetchone()
                 connection.execute("UPDATE members SET avatar = ?, bio = ? WHERE id = ?", (avatar, bio, member_id))
-                row = connection.execute("SELECT id, real_id, avatar, bio FROM members WHERE id = ?", (member_id,)).fetchone()
+                row = connection.execute("SELECT id, real_id, avatar, bio, role FROM members WHERE id = ?", (member_id,)).fetchone()
                 connection.commit()
             if old and old["avatar"] != avatar:
                 remove_upload(old["avatar"])
+            broadcast("member", {"action": "updated", "member": public_member(row)})
             return self.json_response({"member": public_member(row)})
+        if path == "/api/docimages":
+            member_id = self.member()
+            if not member_id:
+                return
+            if not self.require_writer(member_id):
+                return
+            try:
+                url = save_doc_image(str(payload.get("data", "")))
+            except ValueError as error:
+                return self.json_response({"error": str(error)}, 400)
+            return self.json_response({"url": url}, 201)
         if path == "/api/project":
             member_id = self.member()
             if not member_id:
+                return
+            if not self.require_writer(member_id):
                 return
             name = str(payload.get("name", "")).strip()
             if len(name) > 80:
@@ -1000,9 +1290,12 @@ class Handler(BaseHTTPRequestHandler):
                 connection.commit()
             if old and old["icon"] != icon:
                 remove_upload(old["icon"])
+            broadcast("project", {"name": name, "icon": icon})
             return self.json_response({"project": {"name": name, "icon": icon}})
         member_id = self.member()
         if not member_id:
+            return
+        if not self.require_writer(member_id):
             return
         if path == "/api/ideas":
             content = str(payload.get("content", "")).strip()
@@ -1016,8 +1309,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 return self.json_response({"error": str(error)}, 400)
             with db() as connection:
-                connection.execute("INSERT INTO ideas (member_id, content, image, idea_type) VALUES (?, ?, ?, ?)", (member_id, content, image, idea_type))
+                cursor = connection.execute("INSERT INTO ideas (member_id, content, image, idea_type) VALUES (?, ?, ?, ?)", (member_id, content, image, idea_type))
                 connection.commit()
+            broadcast("idea", {"action": "new", "id": cursor.lastrowid})
             return self.json_response({"ideas": self.get_ideas(member_id)})
         if path == "/api/documents":
             title = str(payload.get("title", "")).strip()
@@ -1034,6 +1328,7 @@ class Handler(BaseHTTPRequestHandler):
                     (document_id, member_id, "创建了文档", title, ""),
                 )
                 connection.commit()
+            broadcast("doc", {"action": "new", "id": document_id, "category": category})
             return self.json_response({"id": document_id}, 201)
         if path == "/api/tasks":
             fields = {
@@ -1062,6 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
                       task.get("priority", "medium"), task.get("status", "todo"), member_id,
                       task.get("assignee_id"), task.get("estimated_hours"), task.get("due_date")))
                 connection.commit()
+            broadcast("task", {"action": "changed", "id": cursor.lastrowid})
             return self.json_response({"id": cursor.lastrowid}, 201)
         rollback_parts = path.strip("/").split("/")
         if len(rollback_parts) == 4 and rollback_parts[0] == "api" and rollback_parts[1] == "documents" and rollback_parts[3] == "duplicate":
@@ -1086,6 +1382,7 @@ class Handler(BaseHTTPRequestHandler):
                     (new_id, member_id, "复制了文档", copy_title, row["content"]),
                 )
                 connection.commit()
+            broadcast("doc", {"action": "new", "id": new_id, "category": row["category"]})
             return self.json_response({"id": new_id}, 201)
         if len(rollback_parts) == 4 and rollback_parts[0] == "api" and rollback_parts[1] == "documents" and rollback_parts[3] == "rollback":
             try:
@@ -1117,6 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         connection.execute("INSERT INTO likes (idea_id, member_id) VALUES (?, ?)", (idea_id, member_id))
                     connection.commit()
+                    broadcast("idea", {"action": "update", "id": idea_id, "kind": "like"})
                     return self.json_response({"ideas": idea_rows(connection, member_id)})
                 if parts[3] == "comments":
                     content = str(payload.get("content", "")).strip()
@@ -1124,6 +1422,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.json_response({"error": "评论不能为空且不能超过 1000 字"}, 400)
                     connection.execute("INSERT INTO comments (idea_id, member_id, content) VALUES (?, ?, ?)", (idea_id, member_id, content))
                     connection.commit()
+                    broadcast("idea", {"action": "update", "id": idea_id, "kind": "comment"})
                     return self.json_response({"ideas": idea_rows(connection, member_id)})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "ideas" and parts[2] == "delete":
             return self.json_response({"error": "接口参数无效"}, 400)
@@ -1132,6 +1431,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         member_id = self.member()
         if not member_id:
+            return
+        if not self.require_writer(member_id):
             return
         path = urlparse(self.path).path
         if path.startswith("/api/tasks/"):
@@ -1155,6 +1456,7 @@ class Handler(BaseHTTPRequestHandler):
                     "UPDATE tasks SET %s, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % sets, values
                 )
                 connection.commit()
+            broadcast("task", {"action": "changed", "id": task_id})
             return self.json_response({"saved": True})
         if not path.startswith("/api/documents/"):
             return self.json_response({"error": "接口不存在"}, 404)
@@ -1168,7 +1470,7 @@ class Handler(BaseHTTPRequestHandler):
         if not title or len(title) > 100 or len(content) > 500000:
             return self.json_response({"error": "文档内容无效"}, 400)
         with db() as connection:
-            exists = connection.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone()
+            exists = connection.execute("SELECT category FROM documents WHERE id = ?", (document_id,)).fetchone()
             if not exists:
                 return self.json_response({"error": "文档不存在"}, 404)
             connection.execute("UPDATE documents SET title = ?, content = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (title, content, member_id, document_id))
@@ -1178,13 +1480,51 @@ class Handler(BaseHTTPRequestHandler):
             )
             prune_document_history(connection, document_id)
             connection.commit()
+        broadcast("doc", {"action": "update", "id": document_id, "category": exists["category"]})
         return self.json_response({"saved": True})
 
     def do_DELETE(self):
         member_id = self.member()
         if not member_id:
             return
+        if not self.require_writer(member_id):
+            return
         parts = urlparse(self.path).path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "members":
+            try:
+                target_id = int(parts[2])
+            except ValueError:
+                return self.json_response({"error": "成员不存在"}, 404)
+            if target_id == member_id:
+                return self.json_response({"error": "不能移除自己的账号"}, 400)
+            if not self.require_admin(member_id):
+                return
+            with db() as connection:
+                target = connection.execute("SELECT id, real_id, role FROM members WHERE id = ?", (target_id,)).fetchone()
+                if not target:
+                    return self.json_response({"error": "成员不存在"}, 404)
+                if target["role"] == "admin":
+                    admin_count = connection.execute("SELECT COUNT(*) FROM members WHERE role = 'admin'").fetchone()[0]
+                    if admin_count <= 1:
+                        return self.json_response({"error": "必须至少保留一名管理员"}, 400)
+                occupied = {
+                    "ideas": connection.execute("SELECT COUNT(*) FROM ideas WHERE member_id = ?", (target_id,)).fetchone()[0],
+                    "comments": connection.execute("SELECT COUNT(*) FROM comments WHERE member_id = ?", (target_id,)).fetchone()[0],
+                    "assets": connection.execute("SELECT COUNT(*) FROM assets WHERE member_id = ?", (target_id,)).fetchone()[0],
+                    "documents": connection.execute("SELECT COUNT(*) FROM documents WHERE author_id = ? OR updated_by = ?", (target_id, target_id)).fetchone()[0],
+                    "tasks": connection.execute("SELECT COUNT(*) FROM tasks WHERE author_id = ?", (target_id,)).fetchone()[0],
+                }
+                occupied = {key: value for key, value in occupied.items() if value}
+                if occupied:
+                    detail = "、".join("%s %s 条" % (key, count) for key, count in occupied.items())
+                    return self.json_response({"error": "该成员仍有内容（%s），请先处理后再移除" % detail}, 409)
+                connection.execute("DELETE FROM members WHERE id = ?", (target_id,))
+                connection.commit()
+            stale_tokens = [token for token, value in SESSIONS.items() if value == target_id]
+            for token in stale_tokens:
+                SESSIONS.pop(token, None)
+            broadcast("member", {"action": "removed", "id": target_id, "real_id": target["real_id"]})
+            return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "tasks":
             try:
                 task_id = int(parts[2])
@@ -1195,6 +1535,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response({"error": "任务不存在"}, 404)
                 connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
                 connection.commit()
+            broadcast("task", {"action": "deleted", "id": task_id})
             return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "documents":
             try:
@@ -1202,10 +1543,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self.json_response({"error": "文档不存在"}, 404)
             with db() as connection:
-                if not connection.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone():
+                row = connection.execute("SELECT content, category FROM documents WHERE id = ?", (document_id,)).fetchone()
+                if not row:
                     return self.json_response({"error": "文档不存在"}, 404)
                 connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
                 connection.commit()
+            remove_doc_images_from_html(row["content"])
+            broadcast("doc", {"action": "deleted", "id": document_id, "category": row["category"]})
             return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "assets":
             try:
@@ -1221,6 +1565,7 @@ class Handler(BaseHTTPRequestHandler):
                 connection.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
                 connection.commit()
             remove_asset_file(row["stored_name"])
+            broadcast("asset", {"action": "deleted", "id": asset_id})
             return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "ideas":
             try:
@@ -1236,6 +1581,7 @@ class Handler(BaseHTTPRequestHandler):
                 connection.execute("DELETE FROM ideas WHERE id = ?", (idea_id,))
                 connection.commit()
             remove_upload(owner["image"])
+            broadcast("idea", {"action": "deleted", "id": idea_id})
             return self.json_response({"ideas": self.get_ideas(member_id)})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "comments":
             try:
@@ -1243,19 +1589,22 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self.json_response({"error": "评论不存在"}, 404)
             with db() as connection:
-                owner = connection.execute("SELECT member_id FROM comments WHERE id = ?", (comment_id,)).fetchone()
+                owner = connection.execute("SELECT member_id, idea_id FROM comments WHERE id = ?", (comment_id,)).fetchone()
                 if not owner:
                     return self.json_response({"error": "评论不存在"}, 404)
                 if owner[0] != member_id:
                     return self.json_response({"error": "只能删除自己的评论"}, 403)
                 connection.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
                 connection.commit()
+            broadcast("idea", {"action": "update", "id": owner["idea_id"], "kind": "comment"})
             return self.json_response({"ideas": self.get_ideas(member_id)})
         return self.json_response({"error": "接口不存在"}, 404)
 
     def handle_asset_upload(self):
         member_id = self.member()
         if not member_id:
+            return None
+        if not self.require_writer(member_id):
             return None
         try:
             payload = self.read_json(MAX_ASSET_BYTES + 16 * 1024 * 1024)
@@ -1284,6 +1633,7 @@ class Handler(BaseHTTPRequestHandler):
         asset = dict(row)
         asset["url"] = url
         asset["avatar"] = asset.get("avatar") or ""
+        broadcast("asset", {"action": "new", "id": asset["id"], "category": asset["category"]})
         return self.json_response({"asset": asset}, 201)
 
     def get_ideas(self, member_id):
@@ -1328,6 +1678,7 @@ if __name__ == "__main__":
     DB_PATH = os.path.abspath(args.db)
     UPLOAD_DIR = os.path.abspath(args.uploads)
     ASSET_DIR = os.path.join(UPLOAD_DIR, "assets")
+    DOC_IMG_DIR = os.path.join(UPLOAD_DIR, "doc")
     HOST = args.host
     PORT = args.port
     init_db()

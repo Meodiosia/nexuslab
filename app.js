@@ -28,6 +28,7 @@ function closeWorkspace() {
 }
 
 function switchView(view) {
+  currentView = view;
   navButtons.forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   panels.forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
   viewTitle.textContent = viewNames[view];
@@ -139,29 +140,122 @@ function clearAuth() {
   currentUserAvatar.innerHTML = '';
   currentUserAvatar.classList.add('avatar-placeholder');
   updateAuthButtons();
+  disconnectRealtime();
+}
+
+const roleLabels = { admin: '管理员', member: '成员', viewer: '只读成员' };
+
+function canWrite() {
+  return Boolean(currentMember && sessionToken && currentMember.role !== 'viewer');
+}
+
+/* ---- SSE 实时事件 ---- */
+const realtime = { stream: null, onlineIds: new Set() };
+let currentView = 'overview';
+const eventThrottles = {};
+
+function throttledEvent(key, fn, ms = 1200) {
+  const now = Date.now();
+  if (now - (eventThrottles[key] || 0) < ms) return;
+  eventThrottles[key] = now;
+  fn();
+}
+
+function renderPresence(online) {
+  realtime.onlineIds = new Set((online || []).map((member) => Number(member.id)));
+  const stackEl = document.querySelector('.online-stack');
+  const chips = (online || []).map((member) => {
+    const label = escapeHtml(member.real_id || '?');
+    const content = member.avatar
+      ? `<img src="${escapeHtml(member.avatar)}" alt="${label} 的头像">`
+      : escapeHtml((member.real_id || '?').slice(0, 1));
+    return `<i class="presence-chip" title="${label} 在线">${content}</i>`;
+  }).join('');
+  if (stackEl) stackEl.innerHTML = chips;
+  const bottomText = document.querySelector('.workspace-bottom small');
+  if (bottomText) bottomText.innerHTML = (online || []).length ? `<b>${online.length}</b> 位成员在线` : '等待成员登录';
+  const ideasOnline = document.querySelector('.ideas-online');
+  if (ideasOnline) ideasOnline.textContent = (online || []).length ? `${online.length} 位在线` : '暂无在线状态';
+}
+
+function clearPresence() {
+  realtime.onlineIds = new Set();
+  renderPresence([]);
+}
+
+function handleServerEvent(type, data) {
+  const payload = data || {};
+  switch (type) {
+    case 'presence':
+      renderPresence(payload.online || []);
+      break;
+    case 'member':
+      refreshMembers();
+      if (payload.action === 'joined' || payload.action === 'removed') refreshOverview();
+      break;
+    case 'project':
+      refreshProject();
+      refreshOverview();
+      break;
+    case 'idea':
+      throttledEvent('idea', () => { if (currentView === 'ideas') refreshIdeas(); });
+      break;
+    case 'task':
+      throttledEvent('task', () => {
+        refreshOverview();
+        if (currentView === 'tasks') loadTasks();
+      });
+      break;
+    case 'doc': {
+      if (activeDocument && payload.action === 'update' && Number(payload.id) === activeDocument.id) break;
+      if (currentView === 'document' || currentView === 'environment') {
+        loadDocuments(payload.category === 'environment' ? 'environment' : 'planning');
+      }
+      refreshOverview();
+      break;
+    }
+    case 'asset':
+      throttledEvent('asset', () => {
+        if (currentView === 'assets') loadAssets();
+        refreshOverview();
+      });
+      break;
+    default:
+      break;
+  }
+}
+
+function connectRealtime() {
+  if (!sessionToken) return;
+  disconnectRealtime();
+  try {
+    const es = new EventSource(`/api/stream?token=${encodeURIComponent(sessionToken)}`);
+    realtime.stream = es;
+    es.addEventListener('message', (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        handleServerEvent(message.type, message.data);
+      } catch (error) {
+        // 忽略无效帧
+      }
+    });
+  } catch (error) {
+    realtime.stream = null;
+  }
+}
+
+function disconnectRealtime() {
+  if (realtime.stream) {
+    realtime.stream.close();
+    realtime.stream = null;
+  }
+  clearPresence();
 }
 
 function renderIdeas(ideas, updateSource = true) {
   if (updateSource) allIdeas = ideas;
   ideaFeed.innerHTML = ideas.length ? ideas.map(renderIdea).join('') : '<div class="feed-empty"><span>NO SIGNALS YET</span><h3>还没有人发布动态</h3><p>登录后发布第一条真实创意。</p></div>';
   bindIdeaActions();
-}
-
-function applyIdeaFilters() {
-  const member = document.querySelector('#filter-member').value;
-  const time = document.querySelector('#filter-time').value;
-  const type = document.querySelector('#filter-type').value;
-  const now = Date.now();
-  const windows = { today: 86400000, week: 7 * 86400000, month: 30 * 86400000 };
-  const filtered = allIdeas.filter((idea) => {
-    const memberMatch = member === 'all' || idea.name === member;
-    const typeMatch = type === 'all' || idea.idea_type === type;
-    const timestamp = new Date(`${idea.created_at.replace(' ', 'T')}Z`).getTime();
-    const timeMatch = time === 'all' || (Number.isFinite(timestamp) && now - timestamp <= windows[time]);
-    return memberMatch && typeMatch && timeMatch;
-  });
-  renderIdeas(filtered, false);
-  if (!filtered.length && allIdeas.length) ideaFeed.innerHTML = '<div class="feed-empty"><span>NO MATCHES</span><h3>没有符合条件的动态</h3><p>调整或清除筛选条件后再试。</p></div>';
 }
 
 function setMember(member, token) {
@@ -181,18 +275,105 @@ function setMember(member, token) {
 }
 
 function refreshIdeas() {
-  return api('/api/ideas').then((data) => renderIdeas(data.ideas)).catch((error) => {
+  return api('/api/ideas?limit=50').then((data) => {
+    ideaFeedState.total = data.total || (data.ideas || []).length;
+    ideaFeedState.hasMore = Boolean(data.has_more);
+    const items = data.ideas || [];
+    ideaFeedState.nextBefore = items.length ? items[items.length - 1].id : null;
+    renderIdeas(items);
+    renderIdeaFeedMeta();
+  }).catch((error) => {
     serverState.textContent = error.message.includes('实名 ID') ? '请重新登录' : '离线原型';
   });
 }
 
+const ideaFeedState = { total: 0, hasMore: false, nextBefore: null, loading: false };
+let ideaSearch = '';
+
+function renderIdeaFeedMeta() {
+  const meta = document.querySelector('#idea-feed-meta');
+  const more = document.querySelector('#idea-load-more');
+  if (!meta || !more) return;
+  meta.textContent = `已加载 ${allIdeas.length} 条 · 共 ${ideaFeedState.total} 条信号`;
+  more.hidden = !ideaFeedState.hasMore || !allIdeas.length;
+}
+
+function loadMoreIdeas() {
+  if (!ideaFeedState.hasMore || ideaFeedState.loading) return;
+  ideaFeedState.loading = true;
+  const before = ideaFeedState.nextBefore;
+  api(`/api/ideas?limit=50&before_id=${before}`).then((data) => {
+    ideaFeedState.total = data.total;
+    ideaFeedState.hasMore = Boolean(data.has_more);
+    const existing = new Set(allIdeas.map((idea) => idea.id));
+    const older = (data.ideas || []).filter((idea) => !existing.has(idea.id));
+    ideaFeedState.nextBefore = older.length ? older[older.length - 1].id : null;
+    if (!older.length) ideaFeedState.hasMore = false;
+    allIdeas = allIdeas.concat(older);
+    applyIdeaFilters();
+    renderIdeaFeedMeta();
+  }).catch((error) => { serverState.textContent = error.message; }).finally(() => { ideaFeedState.loading = false; });
+}
+
+function applyIdeaFilters() {
+  const member = document.querySelector('#filter-member').value;
+  const time = document.querySelector('#filter-time').value;
+  const type = document.querySelector('#filter-type').value;
+  const now = Date.now();
+  const windows = { today: 86400000, week: 7 * 86400000, month: 30 * 86400000 };
+  const keyword = ideaSearch.trim().toLowerCase();
+  const filtered = allIdeas.filter((idea) => {
+    const memberMatch = member === 'all' || idea.name === member;
+    const typeMatch = type === 'all' || idea.idea_type === type;
+    const timestamp = new Date(`${idea.created_at.replace(' ', 'T')}Z`).getTime();
+    const timeMatch = time === 'all' || (Number.isFinite(timestamp) && now - timestamp <= windows[time]);
+    const keywordMatch = !keyword || idea.content.toLowerCase().includes(keyword) || (idea.name || '').toLowerCase().includes(keyword);
+    return memberMatch && typeMatch && timeMatch && keywordMatch;
+  });
+  renderIdeas(filtered, false);
+  if (!filtered.length && allIdeas.length) ideaFeed.innerHTML = '<div class="feed-empty"><span>NO MATCHES</span><h3>没有符合条件的动态</h3><p>调整或清除筛选条件后再试。</p></div>';
+  renderIdeaFeedMeta();
+}
+
+function roleOptionMarkup(selected) {
+  return ['member', 'admin', 'viewer'].map((role) => `<option value="${role}" ${role === selected ? 'selected' : ''}>${roleLabels[role]}</option>`).join('');
+}
+
+function changeMemberRole(memberId, role) {
+  if (!currentMember || currentMember.role !== 'admin') return;
+  api(`/api/members/${memberId}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(() => refreshMembers()).catch((error) => { serverState.textContent = error.message; });
+}
+
+function removeMember(memberId, name) {
+  if (!currentMember || currentMember.role !== 'admin') return;
+  if (!confirm(`确认移除成员「${name}」？该账号需先清空其创建的内容（文档/任务/动态/素材）。`)) return;
+  api(`/api/members/${memberId}`, { method: 'DELETE' }).then(() => {
+    refreshMembers();
+    refreshOverview();
+    serverState.textContent = '成员已移除';
+  }).catch((error) => { serverState.textContent = error.message; });
+}
+
 function refreshMembers() {
   return api('/api/members').then((data) => {
-    publicTeamGrid.innerHTML = data.members.length ? data.members.map((member) => `<article class="member-card"><div class="avatar public-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div><span>团队成员</span><h3>${escapeHtml(member.real_id)}</h3><p>${escapeHtml(member.bio || '这个成员还没有填写自我介绍。')}</p><small>VERIFIED MEMBER</small></div></article>`).join('') : '<div class="team-empty"><span>NO MEMBERS YET</span><h3>团队正在集结</h3><p>新用户创建账号后，会自动出现在这里。</p><button type="button" data-open-workspace>创建第一个账号 →</button></div>';
+    const canManage = Boolean(currentMember && currentMember.role === 'admin');
+    publicTeamGrid.innerHTML = data.members.length ? data.members.map((member) => `<article class="member-card"><div class="avatar public-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div><span>团队成员</span><h3>${escapeHtml(member.real_id)}</h3><p>${escapeHtml(member.bio || '这个成员还没有填写自我介绍。')}</p><small>${roleLabels[member.role] || '成员'} · VERIFIED</small></div></article>`).join('') : '<div class="team-empty"><span>NO MEMBERS YET</span><h3>团队正在集结</h3><p>新用户创建账号后，会自动出现在这里。</p><button type="button" data-open-workspace>创建第一个账号 →</button></div>';
     publicTeamGrid.querySelector('[data-open-workspace]')?.addEventListener('click', openWorkspace);
     const peopleList = document.querySelector('#workspace-people-list');
     document.querySelector('#member-total').textContent = `${data.members.length} 位成员`;
-    peopleList.innerHTML = data.members.length ? data.members.map((member) => `<article class="people-row"><div class="people-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div><strong>${escapeHtml(member.real_id)}</strong><span>${escapeHtml(member.bio || '暂无自我介绍')}</span></div><small>团队成员</small></article>`).join('') : '<div class="people-empty">还没有注册成员</div>';
+    peopleList.innerHTML = data.members.length ? data.members.map((member) => {
+      const role = member.role || 'member';
+      const controls = canManage && Number(member.id) !== Number(currentMember.id)
+        ? `<div class="people-controls"><select data-member-role="${member.id}" aria-label="设置 ${escapeHtml(member.real_id)} 的角色">${roleOptionMarkup(role)}</select><button type="button" data-member-remove="${member.id}">移除</button></div>`
+        : '';
+      return `<article class="people-row"><div class="people-avatar ${member.avatar ? 'custom-avatar' : 'avatar-placeholder'}">${member.avatar ? `<img src="${escapeHtml(member.avatar)}" alt="${escapeHtml(member.real_id)} 的头像">` : ''}</div><div class="people-main"><strong>${escapeHtml(member.real_id)}</strong><span>${escapeHtml(member.bio || '暂无自我介绍')}</span></div><span class="role-tag role-${role}">${roleLabels[role] || role}</span>${controls}</article>`;
+    }).join('') : '<div class="people-empty">还没有注册成员</div>';
+    peopleList.querySelectorAll('[data-member-role]').forEach((select) => select.addEventListener('change', () => changeMemberRole(Number(select.dataset.memberRole), select.value)));
+    peopleList.querySelectorAll('[data-member-remove]').forEach((button) => button.addEventListener('click', () => {
+      const row = button.closest('.people-row');
+      const name = row ? row.querySelector('strong').textContent : '';
+      removeMember(Number(button.dataset.memberRemove), name);
+    }));
     const memberFilter = document.querySelector('#filter-member');
     const selectedMember = memberFilter.value;
     memberFilter.innerHTML = '<option value="all">全部成员</option>' + data.members.map((member) => `<option value="${escapeHtml(member.real_id)}">${escapeHtml(member.real_id)}</option>`).join('');
@@ -226,20 +407,37 @@ function requireLogin() {
   return false;
 }
 
+function applyIdeaLikePatch(post, ideas) {
+  const id = Number(post.dataset.ideaId);
+  const fresh = (ideas || []).find((idea) => idea.id === id);
+  if (!fresh) { refreshIdeas(); return; }
+  const index = allIdeas.findIndex((idea) => idea.id === id);
+  if (index >= 0) allIdeas[index] = Object.assign({}, allIdeas[index], fresh);
+  const button = post.querySelector('.like-button');
+  if (button) {
+    button.classList.toggle('liked', Boolean(fresh.liked));
+    const sign = post.querySelector('.like-button span');
+    if (sign) sign.textContent = fresh.liked ? '♥' : '♡';
+    const count = post.querySelector('.like-button b');
+    if (count) count.textContent = fresh.likes || 0;
+  }
+}
+
 function bindIdeaActions(root = ideaFeed) {
   root.querySelectorAll('.delete-idea').forEach((button) => button.addEventListener('click', () => {
     if (!confirm('确认删除这条动态？此操作无法撤销。')) return;
     const post = button.closest('.idea-post');
-    api(`/api/ideas/${post.dataset.ideaId}`, { method: 'DELETE' }).then((data) => { renderIdeas(data.ideas); refreshOverview(); }).catch((error) => { serverState.textContent = error.message; });
+    api(`/api/ideas/${post.dataset.ideaId}`, { method: 'DELETE' }).then(() => { refreshIdeas(); refreshOverview(); }).catch((error) => { serverState.textContent = error.message; });
   }));
   root.querySelectorAll('.delete-comment').forEach((button) => button.addEventListener('click', () => {
     if (!confirm('确认删除这条评论？')) return;
-    api(`/api/comments/${button.dataset.commentId}`, { method: 'DELETE' }).then((data) => renderIdeas(data.ideas)).catch((error) => { serverState.textContent = error.message; });
+    api(`/api/comments/${button.dataset.commentId}`, { method: 'DELETE' }).then(() => refreshIdeas()).catch((error) => { serverState.textContent = error.message; });
   }));
   root.querySelectorAll('.like-button').forEach((button) => button.addEventListener('click', () => {
     if (!requireLogin()) return;
+    if (!canWrite()) { serverState.textContent = '只读成员不能点赞'; return; }
     const post = button.closest('.idea-post');
-    api(`/api/ideas/${post.dataset.ideaId}/like`, { method: 'POST', body: '{}' }).then((data) => renderIdeas(data.ideas)).catch((error) => { serverState.textContent = error.message; });
+    api(`/api/ideas/${post.dataset.ideaId}/like`, { method: 'POST', body: '{}' }).then((data) => applyIdeaLikePatch(post, data.ideas)).catch((error) => { serverState.textContent = error.message; });
   }));
   root.querySelectorAll('.comment-toggle').forEach((button) => button.addEventListener('click', () => {
     const post = button.closest('.idea-post');
@@ -250,10 +448,11 @@ function bindIdeaActions(root = ideaFeed) {
       post.querySelector('.comment-form').addEventListener('submit', (event) => {
         event.preventDefault();
         if (!requireLogin()) return;
+        if (!canWrite()) { serverState.textContent = '只读成员不能评论'; return; }
         const input = event.currentTarget.querySelector('input');
         const value = input.value.trim();
         if (!value) return;
-        api(`/api/ideas/${post.dataset.ideaId}/comments`, { method: 'POST', body: JSON.stringify({ content: value }) }).then((data) => renderIdeas(data.ideas)).catch((error) => { serverState.textContent = error.message; });
+        api(`/api/ideas/${post.dataset.ideaId}/comments`, { method: 'POST', body: JSON.stringify({ content: value }) }).then(() => refreshIdeas()).catch((error) => { serverState.textContent = error.message; });
       });
     }
   }));
@@ -321,11 +520,12 @@ if (ideaForm) {
   ideaForm.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!requireLogin()) return;
+    if (!canWrite()) { serverState.textContent = '只读成员不能发布动态'; return; }
     const content = document.querySelector('#idea-content').value.trim();
     if (!content) return;
     const ideaType = document.querySelector('input[name="idea-type"]:checked').value;
-    api('/api/ideas', { method: 'POST', body: JSON.stringify({ content, image: pendingImage, idea_type: ideaType }) }).then((data) => {
-      renderIdeas(data.ideas);
+    api('/api/ideas', { method: 'POST', body: JSON.stringify({ content, image: pendingImage, idea_type: ideaType }) }).then(() => {
+      refreshIdeas();
       refreshOverview();
       document.querySelector('#idea-content').value = '';
       pendingImage = '';
@@ -357,6 +557,7 @@ loginSubmit.addEventListener('click', () => {
     refreshIdeas();
     refreshMembers();
     refreshOverview();
+    connectRealtime();
   }).catch((error) => { loginMessage.textContent = error.message; });
 });
 loginForm.addEventListener('submit', (event) => { event.preventDefault(); loginSubmit.click(); });
@@ -367,6 +568,7 @@ logoutButton.addEventListener('click', () => {
     clearAuth();
     serverState.textContent = '未登录';
     loginMessage.textContent = '已退出登录';
+    disconnectRealtime();
     refreshIdeas();
     refreshMembers();
     refreshOverview();
@@ -377,12 +579,17 @@ refreshIdeas();
 refreshMembers();
 refreshProject();
 refreshOverview();
+if (sessionToken) connectRealtime();
 
 ['filter-member', 'filter-time', 'filter-type'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', applyIdeaFilters));
+const ideaSearchInput = document.querySelector('#idea-search');
+if (ideaSearchInput) ideaSearchInput.addEventListener('input', () => { ideaSearch = ideaSearchInput.value; applyIdeaFilters(); });
+document.querySelector('#idea-load-more')?.addEventListener('click', loadMoreIdeas);
 document.querySelector('#clear-filters').addEventListener('click', () => {
   document.querySelector('#filter-member').value = 'all';
   document.querySelector('#filter-time').value = 'all';
   document.querySelector('#filter-type').value = 'all';
+  if (ideaSearchInput) { ideaSearchInput.value = ''; ideaSearch = ''; }
   applyIdeaFilters();
 });
 if (sessionToken) {
@@ -437,6 +644,7 @@ document.querySelector('#profile-save').addEventListener('click', () => {
 
 document.querySelector('[data-open-project-settings]').addEventListener('click', () => {
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能修改项目设置'; return; }
   pendingProjectIcon = currentProject.icon || '';
   projectNameInput.value = currentProject.name || '';
   projectIconInput.value = '';
@@ -536,6 +744,7 @@ function loadAssets() {
 
 function deleteAsset(assetId) {
   if (!requireLogin()) return;
+  if (!canWrite()) { serverState.textContent = '只读成员不能删除素材'; return; }
   if (!confirm('确认删除该素材？文件会从服务器移除，此操作无法撤销。')) return;
   api(`/api/assets/${assetId}`, { method: 'DELETE' }).then(() => { loadAssets(); refreshOverview(); }).catch((error) => { serverState.textContent = error.message; });
 }
@@ -544,6 +753,7 @@ async function uploadAssets(files) {
   if (!files || !files.length) return;
   if (!requireLogin()) return;
   const uploadState = document.querySelector('#asset-upload-state');
+  if (!canWrite()) { uploadState.textContent = '只读成员不能上传素材'; return; }
   let ok = 0;
   let failed = 0;
   uploadState.textContent = `上传中 0/${files.length}`;
@@ -599,19 +809,39 @@ function formatDocumentTime(value) {
   return new Date(`${value.replace(' ', 'T')}Z`).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+const documentCache = { planning: [], environment: [] };
+
 function renderDocumentList(category, documents) {
   const list = document.querySelector(`[data-document-list="${category}"]`);
+  const keywordInput = document.querySelector(`[data-doc-search="${category}"]`);
+  const keyword = (keywordInput ? keywordInput.value : '').trim().toLowerCase();
+  const filtered = documents.filter((document) => !keyword
+    || document.title.toLowerCase().includes(keyword)
+    || (document.author || '').toLowerCase().includes(keyword)
+    || (document.updated_by || '').toLowerCase().includes(keyword));
   if (!documents.length) {
     list.innerHTML = `<div class="document-empty">还没有${documentCategoryLabel(category)}</div>`;
     return;
   }
-  list.innerHTML = documents.map((document) => `<button class="document-card" type="button" data-document-id="${document.id}" data-category="${category}"><span class="document-icon">▤</span><div><strong>${escapeHtml(document.title)}</strong><p>作者 ${escapeHtml(document.author)} · 最后由 ${escapeHtml(document.updated_by)} 修改</p><small>${formatDocumentTime(document.updated_at)} · ${document.history_count} 条记录</small></div><b>→</b></button>`).join('');
+  if (!filtered.length) {
+    list.innerHTML = '<div class="document-empty">没有匹配的文档，换个关键词试试。</div>';
+    return;
+  }
+  list.innerHTML = filtered.map((document) => `<button class="document-card" type="button" data-document-id="${document.id}" data-category="${category}"><span class="document-icon">▤</span><div><strong>${escapeHtml(document.title)}</strong><p>作者 ${escapeHtml(document.author)} · 最后由 ${escapeHtml(document.updated_by)} 修改</p><small>${formatDocumentTime(document.updated_at)} · ${document.history_count} 条记录</small></div><b>→</b></button>`).join('');
   list.querySelectorAll('[data-document-id]').forEach((button) => button.addEventListener('click', () => openDocument(Number(button.dataset.documentId), button.dataset.category)));
 }
 
 function loadDocuments(category) {
-  api(`/api/documents?category=${category}`).then((data) => renderDocumentList(category, data.documents)).catch(() => {});
+  api(`/api/documents?category=${category}`).then((data) => {
+    documentCache[category] = data.documents;
+    renderDocumentList(category, data.documents);
+  }).catch(() => {});
 }
+
+document.querySelectorAll('[data-doc-search]').forEach((input) => input.addEventListener('input', () => {
+  const category = input.dataset.docSearch;
+  renderDocumentList(category, documentCache[category] || []);
+}));
 
 function openDocument(id, category) {
   api(`/api/documents/${id}`).then((data) => {
@@ -621,7 +851,7 @@ function openDocument(id, category) {
     const editorShell = panel.querySelector('.document-editor');
     editorShell.hidden = false;
     activeDocumentEditor = editorShell.querySelector('.editor-page');
-    activeDocumentEditor.contentEditable = currentMember ? 'true' : 'false';
+    activeDocumentEditor.contentEditable = canWrite() ? 'true' : 'false';
     activeDocumentEditor.innerHTML = `<h1>${escapeHtml(data.document.title)}</h1>${data.document.content || '<p>点击这里开始编辑。</p>'}`;
     renderDocumentHistory(editorShell, data.history);
   }).catch((error) => { saveState.textContent = error.message; });
@@ -678,6 +908,7 @@ function showRevisionDiff(shell, historyId) {
 function restoreRevision(shell, historyId) {
   if (!activeDocument) return;
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能恢复版本'; return; }
   if (!confirm('恢复到此版本？文档内容将被该版本的快照覆盖，未保存的修改会丢失。')) return;
   clearTimeout(documentSaveTimer);
   api(`/api/documents/${activeDocument.id}/rollback`, { method: 'POST', body: JSON.stringify({ history_id: historyId }) }).then(() => {
@@ -705,6 +936,7 @@ function leaveDocumentEditor(category) {
 function duplicateActiveDocument() {
   if (!activeDocument) return;
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能复制文档'; return; }
   const category = activeDocument.category;
   api(`/api/documents/${activeDocument.id}/duplicate`, { method: 'POST', body: '{}' }).then((data) => {
     saveState.textContent = '已创建副本';
@@ -731,6 +963,7 @@ function exportActiveDocument() {
 function deleteActiveDocument() {
   if (!activeDocument) return;
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能删除文档'; return; }
   if (!confirm(`确认删除文档「${activeDocument.title}」？修改历史会一并删除，此操作无法撤销。`)) return;
   clearTimeout(documentSaveTimer);
   const category = activeDocument.category;
@@ -746,7 +979,7 @@ document.querySelectorAll('[data-doc-export]').forEach((button) => button.addEve
 document.querySelectorAll('[data-doc-delete]').forEach((button) => button.addEventListener('click', deleteActiveDocument));
 
 function saveActiveDocument() {
-  if (!activeDocument || !activeDocumentEditor || !currentMember) return;
+  if (!activeDocument || !activeDocumentEditor || !canWrite()) return;
   const titleNode = activeDocumentEditor.querySelector('h1');
   const title = titleNode?.textContent.trim() || activeDocument.title;
   const clone = activeDocumentEditor.cloneNode(true);
@@ -767,6 +1000,71 @@ document.querySelectorAll('[data-command]').forEach((button) => button.addEventL
   document.execCommand(button.dataset.command, false, button.dataset.value || null);
   activeDocumentEditor.focus();
 }));
+let savedDocRange = null;
+document.addEventListener('selectionchange', () => {
+  if (!activeDocumentEditor) return;
+  const sel = document.getSelection();
+  if (sel && sel.rangeCount && sel.anchorNode && activeDocumentEditor.contains(sel.anchorNode) && sel.focusNode && activeDocumentEditor.contains(sel.focusNode)) {
+    savedDocRange = sel.getRangeAt(0).cloneRange();
+  }
+});
+const docImageInput = document.querySelector('#doc-image-input');
+
+function insertImageIntoEditor(url, alt) {
+  if (!activeDocumentEditor) return;
+  activeDocumentEditor.focus();
+  const sel = document.getSelection();
+  let range = null;
+  if (savedDocRange && savedDocRange.startContainer && savedDocRange.startContainer.isConnected) {
+    range = savedDocRange;
+  } else if (activeDocumentEditor.firstChild) {
+    range = document.createRange();
+    range.selectNodeContents(activeDocumentEditor);
+    range.collapse(false);
+  } else {
+    activeDocumentEditor.innerHTML = '<p></p>';
+    range = document.createRange();
+    range.selectNodeContents(activeDocumentEditor);
+    range.collapse(false);
+  }
+  if (sel) sel.removeAllRanges();
+  range.deleteContents();
+  const img = document.createElement('img');
+  img.src = url;
+  if (alt) img.alt = alt;
+  range.insertNode(img);
+  range.setStartAfter(img);
+  range.collapse(true);
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  savedDocRange = range.cloneRange();
+  activeDocumentEditor.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+document.querySelectorAll('[data-doc-image]').forEach((button) => button.addEventListener('click', () => {
+  if (!canWrite()) { saveState.textContent = '只读成员不能编辑文档'; return; }
+  if (!activeDocumentEditor) return;
+  docImageInput.value = '';
+  docImageInput.click();
+}));
+if (docImageInput) {
+  docImageInput.addEventListener('change', async () => {
+    const file = docImageInput.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { saveState.textContent = '请选择图片文件'; return; }
+    saveState.textContent = '图片处理中…';
+    try {
+      const dataUrl = await compressImageFile(file, 1600, 0.85);
+      const data = await api('/api/docimages', { method: 'POST', body: JSON.stringify({ data: dataUrl }) });
+      insertImageIntoEditor(data.url, file.name);
+      saveState.textContent = '已插入图片，正在保存…';
+    } catch (error) {
+      saveState.textContent = error.message;
+    }
+  });
+}
 document.querySelectorAll('[data-back-documents]').forEach((button) => button.addEventListener('click', () => {
   const panel = button.closest('.workspace-view');
   const category = panel.dataset.viewPanel === 'environment' ? 'environment' : 'planning';
@@ -780,6 +1078,7 @@ document.querySelectorAll('[data-back-documents]').forEach((button) => button.ad
 }));
 document.querySelectorAll('[data-new-document]').forEach((button) => button.addEventListener('click', () => {
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能新建文档'; return; }
   pendingDocumentCategory = button.dataset.newDocument;
   document.querySelector('#new-document-title').textContent = `新增${documentCategoryLabel(pendingDocumentCategory)}`;
   documentTitleInput.value = '';
@@ -908,7 +1207,14 @@ function applyTaskFilters() {
   const type = document.querySelector('#task-filter-type').value;
   const assignee = document.querySelector('#task-filter-assignee').value;
   const priority = document.querySelector('#task-filter-priority').value;
-  renderTasks(allTasks.filter((task) => (type === 'all' || task.task_type === type) && (assignee === 'all' || (assignee === 'unassigned' ? !task.assignee : task.assignee === assignee)) && (priority === 'all' || task.priority === priority)));
+  const searchInput = document.querySelector('#task-search');
+  const keyword = (searchInput ? searchInput.value : '').trim().toLowerCase();
+  renderTasks(allTasks.filter((task) =>
+    (type === 'all' || task.task_type === type)
+    && (assignee === 'all' || (assignee === 'unassigned' ? !task.assignee : task.assignee === assignee))
+    && (priority === 'all' || task.priority === priority)
+    && (!keyword || (task.title || '').toLowerCase().includes(keyword) || (task.description || '').toLowerCase().includes(keyword))
+  ));
 }
 
 function bindTaskDrag() {
@@ -929,14 +1235,18 @@ document.querySelectorAll('[data-task-status]').forEach((section) => {
   section.addEventListener('drop', () => {
     const card = document.querySelector('.task-card.dragging');
     if (!card || !requireLogin()) return;
+    if (!canWrite()) { saveState.textContent = '只读成员不能移动任务'; return; }
     api(`/api/tasks/${card.dataset.taskId}`, { method: 'PUT', body: JSON.stringify({ status: section.dataset.taskStatus }) }).then(() => { loadTasks(); refreshOverview(); }).catch((error) => { saveState.textContent = error.message; });
   });
 });
 ['task-filter-type', 'task-filter-assignee', 'task-filter-priority'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', applyTaskFilters));
+const taskSearchInput = document.querySelector('#task-search');
+if (taskSearchInput) taskSearchInput.addEventListener('input', applyTaskFilters);
 document.querySelector('#task-clear-filters').addEventListener('click', () => {
   document.querySelector('#task-filter-type').value = 'all';
   document.querySelector('#task-filter-assignee').value = 'all';
   document.querySelector('#task-filter-priority').value = 'all';
+  if (taskSearchInput) taskSearchInput.value = '';
   applyTaskFilters();
 });
 
@@ -958,6 +1268,7 @@ function collectTaskFormPayload() {
 
 function openNewTaskDialog() {
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能创建任务'; return; }
   editingTaskId = null;
   document.querySelector('#new-task-form').reset();
   document.querySelector('#task-dialog-heading').textContent = '新建任务';
@@ -969,6 +1280,7 @@ function openNewTaskDialog() {
 
 function openEditTaskDialog(taskId) {
   if (!requireLogin()) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能编辑任务'; return; }
   const task = allTasks.find((item) => item.id === taskId);
   if (!task) return;
   editingTaskId = taskId;
@@ -1003,6 +1315,7 @@ function submitTaskForm() {
 function deleteTask(taskId) {
   const task = allTasks.find((item) => item.id === taskId);
   if (!task) return;
+  if (!canWrite()) { saveState.textContent = '只读成员不能删除任务'; return; }
   if (!confirm(`确认删除任务「${task.title}」？此操作无法撤销。`)) return;
   api(`/api/tasks/${taskId}`, { method: 'DELETE' }).then(() => {
     loadTasks();
