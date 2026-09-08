@@ -82,7 +82,9 @@ sudo bash deploy.sh
 
 脚本会：装 Python/venv/waitress → 放代码到 `/opt/nexuslab` → 创建并启用 `nexuslab` 服务（开机自启、崩溃重启，`--host 127.0.0.1 --port 8000 --backup-minutes 60`）→ 用域名则装 Caddy 并自动 HTTPS。
 
-常用运维：
+**Windows Server 2022**：用 `deploy-windows.ps1`（NSSM 注册 `NexusLab` 服务 + 可选 ngrok 隧道服务，需管理员 PowerShell；脚本会打印用法）。无域名时公网入口用 ngrok 免费静态域名。
+
+常用运维（Linux）：
 ```bash
 systemctl status nexuslab        # 状态
 journalctl -u nexuslab -f        # 跟随日志
