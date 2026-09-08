@@ -68,6 +68,30 @@ py server.py --host 0.0.0.0 --port 8000 --backup-minutes 60
 - 改动只停服/重启即可生效（纯前端改动建议让队友强刷 Ctrl+F5 清缓存）。
 - 建议把"一次改动 = 一次 git 提交"当成习惯，回滚可定位到具体提交。
 
+## 部署到云服务器（VPS，推荐长期使用）
+
+把项目上传/克隆到 Ubuntu 24.04 的 VPS 后，一条命令完成依赖 + systemd 常驻 + Caddy HTTPS：
+
+```bash
+# 用域名（已把 A 记录指向 VPS 公网 IP）
+sudo bash deploy.sh your.domain.com
+
+# 无域名：不装 Caddy，之后用 ngrok / cloudflared 做公网入口
+sudo bash deploy.sh
+```
+
+脚本会：装 Python/venv/waitress → 放代码到 `/opt/nexuslab` → 创建并启用 `nexuslab` 服务（开机自启、崩溃重启，`--host 127.0.0.1 --port 8000 --backup-minutes 60`）→ 用域名则装 Caddy 并自动 HTTPS。
+
+常用运维：
+```bash
+systemctl status nexuslab        # 状态
+journalctl -u nexuslab -f        # 跟随日志
+sudo systemctl restart nexuslab  # 更新代码后重启
+cd /opt/nexuslab && sudo git pull
+```
+
+公网在线前：第一个注册者=管理员 → 项目设置开启「仅限邀请注册」→ 下发邀请码。
+
 ## 安全性
 
 - 文档富文本保存与读取都经过白名单净化（保留安全标签，剔除脚本/事件属性/危险协议），防存储型 XSS。
