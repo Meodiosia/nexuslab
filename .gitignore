@@ -7,7 +7,9 @@ nexuslab.db
 nexuslab.db-wal
 nexuslab.db-shm
 *.db
+!*.sql
 uploads/
+backups/
 
 # 其他
 .DS_Store

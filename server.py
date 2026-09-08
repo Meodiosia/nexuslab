@@ -53,6 +53,14 @@ ASSET_MIME_EXT = {
 }
 SESSIONS = {}
 
+# ---- 安全响应头（生产加固） ----
+CSP_VALUE = (
+    "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+)
+
 # ---- 角色 ----
 ROLES = ("admin", "member", "viewer")
 ROLE_LABELS = {"admin": "管理员", "member": "成员", "viewer": "只读成员"}
@@ -90,6 +98,74 @@ def broadcast(event_type, data=None):
                 item["queue"].put_nowait(line)
             except queue.Full:
                 pass
+
+
+def broadcast_to(event_type, data, member_ids):
+    """只推送给指定在线成员（用于通知）。"""
+    wanted = {int(member_id) for member_id in (member_ids or [])}
+    if not wanted:
+        return
+    line = _event_lines({"type": event_type, "data": data})
+    with _EVENT_LOCK:
+        for item in _SUBSCRIBERS:
+            if item["member_id"] in wanted:
+                try:
+                    item["queue"].put_nowait(line)
+                except queue.Full:
+                    pass
+
+
+MENTION_RE = re.compile(r"@([A-Za-z0-9_\u4e00-\u9fff\-]{2,32})")
+INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def make_invite_code():
+    return "".join(secrets.choice(INVITE_ALPHABET) for _ in range(8))
+
+
+def insert_mention_notifications(actor_member_id, text, ref_type, ref_id):
+    """解析 @real_id 并生成通知（跳过自己），返回被通知者 id 列表。"""
+    names = sorted(set(MENTION_RE.findall(text or "")))
+    if not names:
+        return []
+    placeholders = ",".join("?" * len(names))
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT id, real_id FROM members WHERE real_id IN (%s)" % placeholders, names
+        ).fetchall()
+        actor = connection.execute("SELECT real_id FROM members WHERE id = ?", (actor_member_id,)).fetchone()
+        name_to_id = {row["real_id"]: row["id"] for row in rows}
+        targets = []
+        for name in names:
+            member_id = name_to_id.get(name)
+            if member_id and member_id != actor_member_id and member_id not in targets:
+                targets.append(member_id)
+        actor_name = actor["real_id"] if actor else "有人"
+        for target_id in targets:
+            connection.execute(
+                "INSERT INTO notifications (target_member_id, actor_member_id, kind, text, ref_type, ref_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (target_id, actor_member_id, "mention", "%s 提到了你" % actor_name, ref_type, ref_id),
+            )
+        connection.commit()
+    if targets:
+        broadcast_to("notify", {"kind": "mention", "ref_type": ref_type, "ref_id": ref_id}, targets)
+    return targets
+
+
+def notify_assignee(actor_member_id, assignee_id, ref_id):
+    if not assignee_id or assignee_id == actor_member_id:
+        return
+    with db() as connection:
+        actor = connection.execute("SELECT real_id FROM members WHERE id = ?", (actor_member_id,)).fetchone()
+        actor_name = actor["real_id"] if actor else "成员"
+        connection.execute(
+            "INSERT INTO notifications (target_member_id, actor_member_id, kind, text, ref_type, ref_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (assignee_id, actor_member_id, "assign", "%s 把任务指派给了你" % actor_name, "task", ref_id),
+        )
+        connection.commit()
+    broadcast_to("notify", {"kind": "assign", "ref_type": "task", "ref_id": ref_id}, [assignee_id])
 
 
 def touch_presence(member_id):
@@ -235,8 +311,23 @@ def init_db():
             name TEXT NOT NULL DEFAULT '',
             icon TEXT NOT NULL DEFAULT '',
             updated_by INTEGER,
+            require_invite INTEGER NOT NULL DEFAULT 0,
+            invite_code TEXT NOT NULL DEFAULT '',
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(updated_by) REFERENCES members(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_member_id INTEGER NOT NULL,
+            actor_member_id INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'mention',
+            text TEXT NOT NULL DEFAULT '',
+            ref_type TEXT NOT NULL DEFAULT '',
+            ref_id INTEGER,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(target_member_id) REFERENCES members(id) ON DELETE CASCADE,
+            FOREIGN KEY(actor_member_id) REFERENCES members(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS assets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,6 +356,11 @@ def init_db():
         row = connection.execute("SELECT MIN(id) AS id FROM members").fetchone()
         if row and row["id"] is not None:
             connection.execute("UPDATE members SET role = 'admin' WHERE id = ?", (row["id"],))
+    settings_columns = {row[1] for row in connection.execute("PRAGMA table_info(project_settings)").fetchall()}
+    if "require_invite" not in settings_columns:
+        connection.execute("ALTER TABLE project_settings ADD COLUMN require_invite INTEGER NOT NULL DEFAULT 0")
+    if "invite_code" not in settings_columns:
+        connection.execute("ALTER TABLE project_settings ADD COLUMN invite_code TEXT NOT NULL DEFAULT ''")
     idea_columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)").fetchall()}
     if "idea_type" not in idea_columns:
         connection.execute("ALTER TABLE ideas ADD COLUMN idea_type TEXT NOT NULL DEFAULT 'gameplay'")
@@ -542,7 +638,7 @@ def rollback_document(connection, document_id, history_id, member_id):
     )
     prune_document_history(connection, document_id)
     connection.commit()
-    broadcast("doc", {"action": "update", "id": document_id, "category": category_row["category"] if category_row else "planning"})
+    broadcast("doc", {"action": "update", "id": document_id, "category": category_row["category"] if category_row else "planning", "actor": member_id})
     return {"ok": True, "document_id": document_id, "restored_history_id": entry["id"]}, 200, None
 
 
@@ -824,12 +920,19 @@ def idea_rows(connection, current_member, before_id=None, limit=None):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def add_security_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Content-Security-Policy", CSP_VALUE)
+
     def json_response(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.add_security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -895,6 +998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
+            self.add_security_headers()
             self.end_headers()
             stream_queue = subscribe_stream(member_id)
             push_presence()
@@ -928,10 +1032,33 @@ class Handler(BaseHTTPRequestHandler):
             with db() as connection:
                 rows = connection.execute("SELECT id, real_id, avatar, bio, role FROM members ORDER BY id ASC").fetchall()
             return self.json_response({"members": [public_member(row) for row in rows]})
-        if path == "/api/project":
+        if path == "/api/notifications":
+            member_id = self.member()
+            if not member_id:
+                return
             with db() as connection:
-                row = connection.execute("SELECT name, icon, updated_at FROM project_settings WHERE id = 1").fetchone()
-            return self.json_response({"project": dict(row) if row else {"name": "", "icon": "", "updated_at": None}})
+                rows = connection.execute("""
+                    SELECT notifications.id, notifications.kind, notifications.text, notifications.ref_type,
+                      notifications.ref_id, notifications.is_read, notifications.created_at,
+                      members.real_id AS actor
+                    FROM notifications JOIN members ON members.id = notifications.actor_member_id
+                    WHERE notifications.target_member_id = ?
+                    ORDER BY notifications.id DESC LIMIT 50
+                """, (member_id,)).fetchall()
+                unread = connection.execute("SELECT COUNT(*) FROM notifications WHERE target_member_id = ? AND is_read = 0", (member_id,)).fetchone()[0]
+            return self.json_response({"items": [dict(row) for row in rows], "unread": unread})
+        if path == "/api/project":
+            member_id = self.member(False)
+            with db() as connection:
+                row = connection.execute("SELECT name, icon, updated_at, require_invite, invite_code FROM project_settings WHERE id = 1").fetchone()
+            if not row:
+                return self.json_response({"project": {"name": "", "icon": "", "updated_at": None, "require_invite": False}})
+            project = dict(row)
+            project["require_invite"] = bool(project.get("require_invite"))
+            role = self.member_role(member_id) if member_id else ""
+            if role != "admin":
+                project["invite_code"] = ""
+            return self.json_response({"project": project})
         if path == "/api/ideas":
             member_id = self.member(False) or 0
             query_params = parse_qs(parsed.query)
@@ -1036,6 +1163,7 @@ class Handler(BaseHTTPRequestHandler):
                 """, (document_id, DOC_HISTORY_KEEP)).fetchall()
             document = dict(row)
             document["content"] = sanitize_html(document.get("content") or "")
+            document["revision"] = history[0]["id"] if history else 0
             return self.json_response({"document": document, "history": [dict(item) for item in history]})
         if path == "/api/overview":
             with db() as connection:
@@ -1154,6 +1282,31 @@ class Handler(BaseHTTPRequestHandler):
                     connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
                     connection.commit()
             return self.json_response({"ok": True})
+        if path == "/api/notifications/read":
+            member_id = self.member()
+            if not member_id:
+                return
+            ids = payload.get("ids")
+            valid_ids = []
+            if isinstance(ids, list):
+                for item in ids:
+                    try:
+                        valid_ids.append(int(item))
+                    except (TypeError, ValueError):
+                        pass
+            if valid_ids:
+                placeholders = ",".join("?" * len(valid_ids))
+                with db() as connection:
+                    connection.execute(
+                        "UPDATE notifications SET is_read = 1 WHERE target_member_id = ? AND id IN (%s)" % placeholders,
+                        [member_id] + valid_ids,
+                    )
+                    connection.commit()
+            else:
+                with db() as connection:
+                    connection.execute("UPDATE notifications SET is_read = 1 WHERE target_member_id = ?", (member_id,))
+                    connection.commit()
+            return self.json_response({"ok": True})
         role_parts = path.strip("/").split("/")
         if len(role_parts) == 4 and role_parts[0] == "api" and role_parts[1] == "members" and role_parts[3] == "role":
             admin_id = self.member()
@@ -1209,6 +1362,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"error": "密码需要 6 到 128 个字符"}, 400)
             if len(bio) > 200:
                 return self.json_response({"error": "自我介绍不能超过 200 字"}, 400)
+            with db() as connection:
+                settings = connection.execute("SELECT require_invite, invite_code FROM project_settings WHERE id = 1").fetchone()
+            if settings and settings["require_invite"]:
+                code = str(payload.get("invite_code", "")).strip().upper()
+                if code != (settings["invite_code"] or ""):
+                    return self.json_response({"error": "团队当前仅限邀请注册，请输入正确的邀请码"}, 400)
             salt, password_hash = hash_password(password)
             with db() as connection:
                 existing = connection.execute("SELECT id, password_hash FROM members WHERE real_id = ?", (real_id,)).fetchone()
@@ -1281,17 +1440,31 @@ class Handler(BaseHTTPRequestHandler):
                 icon = save_data_image(str(payload.get("icon", "")), "项目图标", MAX_ICON_BYTES)
             except ValueError as error:
                 return self.json_response({"error": str(error)}, 400)
+            is_admin = self.member_role(member_id) == "admin"
+            if not is_admin and ("require_invite" in payload or "rotate_code" in payload):
+                return self.json_response({"error": "仅管理员可修改邀请设置"}, 403)
+            require_invite = bool(payload.get("require_invite"))
+            rotate = bool(payload.get("rotate_code"))
             with db() as connection:
-                old = connection.execute("SELECT icon FROM project_settings WHERE id = 1").fetchone()
+                old = connection.execute("SELECT icon, invite_code, require_invite FROM project_settings WHERE id = 1").fetchone()
+                old_code = old["invite_code"] if old else ""
+                if require_invite:
+                    if not old_code or (is_admin and rotate):
+                        old_code = make_invite_code()
+                invite_value = old_code if require_invite else (old_code or "")
                 connection.execute("""
-                    INSERT INTO project_settings (id, name, icon, updated_by, updated_at) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP
-                """, (name, icon, member_id))
+                    INSERT INTO project_settings (id, name, icon, updated_by, require_invite, invite_code, updated_at)
+                    VALUES (1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon,
+                      updated_by=excluded.updated_by, require_invite=excluded.require_invite,
+                      invite_code=excluded.invite_code, updated_at=CURRENT_TIMESTAMP
+                """, (name, icon, member_id, 1 if require_invite else 0, invite_value))
                 connection.commit()
             if old and old["icon"] != icon:
                 remove_upload(old["icon"])
-            broadcast("project", {"name": name, "icon": icon})
-            return self.json_response({"project": {"name": name, "icon": icon}})
+            project = {"name": name, "icon": icon, "require_invite": require_invite, "invite_code": invite_value if is_admin else ""}
+            broadcast("project", project)
+            return self.json_response({"project": project})
         member_id = self.member()
         if not member_id:
             return
@@ -1312,6 +1485,7 @@ class Handler(BaseHTTPRequestHandler):
                 cursor = connection.execute("INSERT INTO ideas (member_id, content, image, idea_type) VALUES (?, ?, ?, ?)", (member_id, content, image, idea_type))
                 connection.commit()
             broadcast("idea", {"action": "new", "id": cursor.lastrowid})
+            insert_mention_notifications(member_id, content, "idea", cursor.lastrowid)
             return self.json_response({"ideas": self.get_ideas(member_id)})
         if path == "/api/documents":
             title = str(payload.get("title", "")).strip()
@@ -1328,7 +1502,7 @@ class Handler(BaseHTTPRequestHandler):
                     (document_id, member_id, "创建了文档", title, ""),
                 )
                 connection.commit()
-            broadcast("doc", {"action": "new", "id": document_id, "category": category})
+            broadcast("doc", {"action": "new", "id": document_id, "category": category, "actor": member_id})
             return self.json_response({"id": document_id}, 201)
         if path == "/api/tasks":
             fields = {
@@ -1358,6 +1532,7 @@ class Handler(BaseHTTPRequestHandler):
                       task.get("assignee_id"), task.get("estimated_hours"), task.get("due_date")))
                 connection.commit()
             broadcast("task", {"action": "changed", "id": cursor.lastrowid})
+            notify_assignee(member_id, task.get("assignee_id"), cursor.lastrowid)
             return self.json_response({"id": cursor.lastrowid}, 201)
         rollback_parts = path.strip("/").split("/")
         if len(rollback_parts) == 4 and rollback_parts[0] == "api" and rollback_parts[1] == "documents" and rollback_parts[3] == "duplicate":
@@ -1382,7 +1557,7 @@ class Handler(BaseHTTPRequestHandler):
                     (new_id, member_id, "复制了文档", copy_title, row["content"]),
                 )
                 connection.commit()
-            broadcast("doc", {"action": "new", "id": new_id, "category": row["category"]})
+            broadcast("doc", {"action": "new", "id": new_id, "category": row["category"], "actor": member_id})
             return self.json_response({"id": new_id}, 201)
         if len(rollback_parts) == 4 and rollback_parts[0] == "api" and rollback_parts[1] == "documents" and rollback_parts[3] == "rollback":
             try:
@@ -1423,6 +1598,7 @@ class Handler(BaseHTTPRequestHandler):
                     connection.execute("INSERT INTO comments (idea_id, member_id, content) VALUES (?, ?, ?)", (idea_id, member_id, content))
                     connection.commit()
                     broadcast("idea", {"action": "update", "id": idea_id, "kind": "comment"})
+                    insert_mention_notifications(member_id, content, "comment", idea_id)
                     return self.json_response({"ideas": idea_rows(connection, member_id)})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "ideas" and parts[2] == "delete":
             return self.json_response({"error": "接口参数无效"}, 400)
@@ -1446,7 +1622,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 return self.json_response({"error": str(error)}, 400)
             with db() as connection:
-                if not connection.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
+                current = connection.execute("SELECT assignee_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                if not current:
                     return self.json_response({"error": "任务不存在"}, 404)
                 if not task_assignee_exists(connection, updates.get("assignee_id")):
                     return self.json_response({"error": "指派成员不存在"}, 400)
@@ -1456,6 +1633,8 @@ class Handler(BaseHTTPRequestHandler):
                     "UPDATE tasks SET %s, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % sets, values
                 )
                 connection.commit()
+            if "assignee_id" in updates and updates["assignee_id"] != current["assignee_id"]:
+                notify_assignee(member_id, updates["assignee_id"], task_id)
             broadcast("task", {"action": "changed", "id": task_id})
             return self.json_response({"saved": True})
         if not path.startswith("/api/documents/"):
@@ -1467,21 +1646,31 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"error": "请求数据无效"}, 400)
         title = str(payload.get("title", "")).strip()
         content = sanitize_html(str(payload.get("content", "")))
+        force = bool(payload.get("force"))
+        try:
+            base_revision = int(payload["base_revision"]) if payload.get("base_revision") is not None else None
+        except (TypeError, ValueError):
+            base_revision = None
         if not title or len(title) > 100 or len(content) > 500000:
             return self.json_response({"error": "文档内容无效"}, 400)
         with db() as connection:
             exists = connection.execute("SELECT category FROM documents WHERE id = ?", (document_id,)).fetchone()
             if not exists:
                 return self.json_response({"error": "文档不存在"}, 404)
+            current_revision = connection.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM document_history WHERE document_id = ?", (document_id,)
+            ).fetchone()[0]
+            if base_revision is not None and base_revision != current_revision and not force:
+                return self.json_response({"error": "文档已被其他成员修改", "revision": current_revision}, 409)
             connection.execute("UPDATE documents SET title = ?, content = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (title, content, member_id, document_id))
-            connection.execute(
+            cursor = connection.execute(
                 "INSERT INTO document_history (document_id, member_id, action, title, content) VALUES (?, ?, ?, ?, ?)",
                 (document_id, member_id, "修改了文档", title, content),
             )
             prune_document_history(connection, document_id)
             connection.commit()
-        broadcast("doc", {"action": "update", "id": document_id, "category": exists["category"]})
-        return self.json_response({"saved": True})
+        broadcast("doc", {"action": "update", "id": document_id, "category": exists["category"], "actor": member_id})
+        return self.json_response({"saved": True, "revision": cursor.lastrowid})
 
     def do_DELETE(self):
         member_id = self.member()
@@ -1549,7 +1738,7 @@ class Handler(BaseHTTPRequestHandler):
                 connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
                 connection.commit()
             remove_doc_images_from_html(row["content"])
-            broadcast("doc", {"action": "deleted", "id": document_id, "category": row["category"]})
+            broadcast("doc", {"action": "deleted", "id": document_id, "category": row["category"], "actor": member_id})
             return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "assets":
             try:
@@ -1657,6 +1846,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.add_security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -1664,16 +1854,57 @@ class Handler(BaseHTTPRequestHandler):
         print("[%s] %s" % (self.log_date_time_string(), format % args))
 
 
+BACKUP_KEEP = 24  # 保留最近多少份备份
+
+
+def create_backup(backup_dir):
+    """用 sqlite3 backup API 生成一致性备份，并清理过期备份。"""
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(backup_dir, "nexuslab-%s.db" % stamp)
+    source = sqlite3.connect(DB_PATH)
+    target = sqlite3.connect(dest)
+    try:
+        with target:
+            source.backup(target)
+    finally:
+        source.close()
+        target.close()
+    files = sorted(name for name in os.listdir(backup_dir) if name.startswith("nexuslab-") and name.endswith(".db"))
+    for name in files[:-BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(backup_dir, name))
+        except OSError:
+            pass
+    return dest
+
+
+def backup_loop(backup_dir, interval_seconds):
+    while True:
+        time.sleep(interval_seconds)
+        try:
+            create_backup(backup_dir)
+        except Exception as error:
+            print("[backup] failed: %s" % error)
+
+
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="NEXUS LAB 协作服务（无第三方依赖）")
+    parser = argparse.ArgumentParser(description="NEXUS LAB 协作服务（可选 waitress 加速；其余零依赖）")
     parser.add_argument("--host", default=HOST, help="监听地址，默认 127.0.0.1；局域网协作请用 0.0.0.0")
     parser.add_argument("--port", type=int, default=PORT, help="监听端口，默认 %d" % PORT)
     parser.add_argument("--db", default=DB_PATH, help="SQLite 数据库文件路径")
     parser.add_argument("--uploads", default=UPLOAD_DIR, help="上传文件存储目录")
+    parser.add_argument("--backup-minutes", type=int, default=60, help="自动备份间隔（分钟），0 关闭，默认 60")
+    parser.add_argument("--backup-dir", default="", help="备份目录（默认与数据库同目录的 backups/）")
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
+    try:
+        import waitress  # noqa: F401 可选依赖：pip install waitress
+        HAS_WAITRESS = True
+    except ImportError:
+        HAS_WAITRESS = False
     args = parse_args()
     DB_PATH = os.path.abspath(args.db)
     UPLOAD_DIR = os.path.abspath(args.uploads)
@@ -1683,7 +1914,17 @@ if __name__ == "__main__":
     PORT = args.port
     init_db()
     purge_expired_sessions()
+    if args.backup_minutes and args.backup_minutes > 0:
+        backup_dir = os.path.abspath(args.backup_dir or os.path.join(os.path.dirname(DB_PATH), "backups"))
+        first = create_backup(backup_dir)
+        print("  backup: %s（每 %d 分钟；保留 %d 份）" % (backup_dir, args.backup_minutes, BACKUP_KEEP))
+        threading.Thread(target=backup_loop, args=(backup_dir, args.backup_minutes * 60), daemon=True).start()
     print("NEXUS LAB server running at http://%s:%s" % (HOST, PORT))
     print("  db:      %s" % DB_PATH)
     print("  uploads: %s" % UPLOAD_DIR)
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    if HAS_WAITRESS:
+        print("  server:  waitress (threads=12)")
+        waitress.serve(Handler, host=HOST, port=PORT, threads=12)
+    else:
+        print("  server:  stdlib ThreadingHTTPServer（建议 pip install waitress）")
+        ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

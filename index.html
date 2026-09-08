@@ -114,7 +114,12 @@
         <div class="workspace-bottom"><span>当前会话</span><div class="online-stack" id="online-members"></div><small><b></b> 等待成员登录</small></div>
       </aside>
       <section class="workspace-main">
-        <header class="workspace-header"><div><span>项目空间</span><b>/</b><strong id="view-title">项目概览</strong></div><div class="header-actions"><span class="server-state" id="server-state">等待连接</span><span class="save-state" id="save-state">所有更改已保存</span><button type="button" data-open-profile>个人资料</button><button type="button" data-open-login>账号登录</button><button type="button" data-logout hidden>退出登录</button><button type="button">分享</button><span class="user-avatar avatar-placeholder" id="current-user-avatar"></span></div></header>
+        <header class="workspace-header"><div><span>项目空间</span><b>/</b><strong id="view-title">项目概览</strong></div><div class="header-actions"><span class="server-state" id="server-state">等待连接</span><span class="save-state" id="save-state">所有更改已保存</span><button type="button" data-open-profile>个人资料</button><button type="button" data-open-login>账号登录</button><button type="button" data-logout hidden>退出登录</button><button type="button">分享</button><span class="user-avatar avatar-placeholder" id="current-user-avatar"></span><button type="button" class="notify-button" id="notify-button" aria-label="通知" title="通知"><span>●</span><b class="notify-badge" id="notify-badge" hidden>0</b></button></div>
+        <div class="notify-panel" id="notify-panel" hidden>
+          <header><b>通知</b><button type="button" data-notify-close aria-label="关闭">×</button></header>
+          <ul id="notify-list"></ul>
+          <footer><button type="button" id="notify-mark-read">全部标为已读</button></footer>
+        </div></header>
         <nav class="mobile-view-nav" aria-label="工作台视图切换">
           <button class="active" type="button" data-view="overview"><span>⌂</span>概览</button>
           <button type="button" data-view="document"><span>▤</span>策划</button>
@@ -124,6 +129,12 @@
           <button type="button" data-view="assets"><span>◇</span>素材</button>
           <button type="button" data-view="ideas"><span>✦</span>创意</button>
         </nav>
+        <div class="doc-conflict" id="doc-conflict" hidden>
+          <span id="doc-conflict-text"></span>
+          <button type="button" data-conflict-reload>载入最新版本</button>
+          <button type="button" data-conflict-force hidden>以我的版本保存</button>
+          <button type="button" data-conflict-dismiss>暂不处理</button>
+        </div>
 
         <div class="workspace-view active" data-view-panel="overview">
           <div class="view-intro">
@@ -216,6 +227,7 @@
       <label for="account-password">密码</label>
       <input id="account-password" name="account-password" type="password" placeholder="至少 6 个字符" maxlength="128" autocomplete="current-password" required>
       <div class="register-fields" id="register-fields"><label for="register-bio">自我介绍</label><textarea id="register-bio" maxlength="200" rows="3" placeholder="介绍你的角色、技能或创作偏好"></textarea><small><b id="bio-count">0</b> / 200</small></div>
+      <div class="invite-field" id="invite-field" hidden><label for="register-invite-code">邀请码</label><input id="register-invite-code" maxlength="10" placeholder="输入团队邀请码" autocomplete="off"></div>
       <button class="login-submit" type="button" id="login-submit">登录并继续 <b>↗</b></button>
       <small id="login-message">还没有账号？切换到“创建账号”</small>
     </form>
@@ -272,6 +284,10 @@
       <p>PROJECT IDENTITY</p><h2>项目设置</h2><span>自定义团队当前项目的名称和图标，保存后所有成员都会看到更新。</span>
       <label for="project-name-input">项目名称</label><input id="project-name-input" maxlength="80" placeholder="输入项目名称" required>
       <label class="project-icon-upload" for="project-icon-input"><span id="project-icon-preview">◇</span><b>选择项目图标</b><small>PNG、JPG 或 SVG · 最大 3 MB</small><input id="project-icon-input" type="file" accept="image/*" hidden></label>
+      <div class="invite-settings" id="invite-settings" hidden>
+        <label class="invite-row" for="project-invite-enable"><span><b>仅限邀请注册</b><small>开启后新成员注册需要输入邀请码</small></span><input type="checkbox" id="project-invite-enable"></label>
+        <div class="invite-code-row" id="invite-code-row" hidden><code id="project-invite-code"></code><div><button type="button" id="project-invite-rotate">重新生成</button><button type="button" id="project-invite-copy">复制</button></div></div>
+      </div>
       <button class="login-submit" type="button" id="save-project-settings">保存项目设置 <b>↗</b></button><small id="project-settings-message"></small>
     </form>
   </dialog>

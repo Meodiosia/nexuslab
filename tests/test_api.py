@@ -484,5 +484,126 @@ class RealtimeRoleApiTest(unittest.TestCase):
         conn_b.close()
 
 
+class InviteConflictNotifyApiTest(unittest.TestCase):
+    """邀请注册、文档并发冲突基线、@提及与指派通知。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _start_server(cls, "nexuslab_invite_")
+
+    @classmethod
+    def tearDownClass(cls):
+        _stop_server(cls)
+
+    def request(self, method, path, payload=None, token=None):
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(self.base + path, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("X-Session", token)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    return resp.status, raw
+        except urllib.error.HTTPError as err:
+            raw = err.read()
+            try:
+                return err.code, json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return err.code, raw
+
+    def register(self, real_id, invite_code=None, expect=201):
+        payload = {"real_id": real_id, "password": "pass123456", "bio": "测试"}
+        if invite_code is not None:
+            payload["invite_code"] = invite_code
+        status, data = self.request("POST", "/api/register", payload)
+        self.assertEqual(status, expect, data)
+        return (data.get("token"), data.get("member")) if status == expect else (None, None)
+
+    def test_a_invite_gating(self):
+        admin_token, _ = self.register("inv_admin")
+        status, data = self.request("GET", "/api/project", token=admin_token)
+        self.assertEqual(status, 200, data)
+        self.assertFalse(data["project"]["require_invite"], data)
+        # 管理员开启邀请 + 自动生成邀请码
+        status, data = self.request("POST", "/api/project", {"name": "项目", "icon": "", "require_invite": True}, admin_token)
+        self.assertEqual(status, 200, data)
+        code = data["project"].get("invite_code", "")
+        self.assertTrue(len(code) >= 6, data)
+        self.assertTrue(data["project"]["require_invite"], data)
+        # 公开接口能看到开关，但看不到邀请码
+        status, data = self.request("GET", "/api/project")
+        self.assertTrue(data["project"]["require_invite"], data)
+        self.assertEqual(data["project"]["invite_code"], "", data)
+        # 无码注册被拒，有码成功
+        self.register("inv_guest", expect=400)
+        token_member, member = self.register("inv_ok_member", invite_code=code)
+        self.assertEqual(member["role"], "member")
+        # 轮换邀请码后旧码失效
+        status, data = self.request("POST", "/api/project", {"name": "项目", "icon": "", "require_invite": True, "rotate_code": True}, admin_token)
+        new_code = data["project"]["invite_code"]
+        self.assertNotEqual(new_code, code, data)
+        self.register("inv_old_code", invite_code=code, expect=400)
+        self.register("inv_new_code", invite_code=new_code)
+        # 非管理员不能修改邀请设置
+        status, data = self.request("POST", "/api/project", {"name": "项目", "icon": "", "require_invite": False}, token_member)
+        self.assertEqual(status, 403, data)
+        # 关闭邀请
+        status, data = self.request("POST", "/api/project", {"name": "项目", "icon": "", "require_invite": False}, admin_token)
+        self.assertFalse(data["project"]["require_invite"], data)
+
+    def test_b_mention_and_assign_notifications(self):
+        token_a, member_a = self.register("ntf_a")
+        token_b, member_b = self.register("ntf_b")
+        token_admin, _ = self.register("ntf_admin")
+        # 评论中 @提及 B
+        status, data = self.request("POST", "/api/ideas", {"content": "创意内容", "idea_type": "gameplay"}, token_a)
+        idea_id = next(x for x in data["ideas"] if x["content"] == "创意内容")["id"]
+        status, data = self.request("POST", "/api/ideas/%s/comments" % idea_id, {"content": "@ntf_b 帮我看看"}, token_a)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/notifications", token=token_b)
+        self.assertGreaterEqual(data["unread"], 1, data)
+        self.assertTrue(any(item["ref_type"] == "comment" for item in data["items"]), data)
+        unread_ids = [item["id"] for item in data["items"] if not item["is_read"]]
+        status, data = self.request("POST", "/api/notifications/read", {"ids": unread_ids[:1]}, token_b)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/notifications", token=token_b)
+        self.assertEqual(data["items"][0]["is_read"], 1, data)
+        # 任务指派通知（创建者不是被指派者）
+        status, data = self.request("POST", "/api/tasks", {"title": "指派任务", "description": "", "task_type": "planning",
+                                                           "priority": "medium", "status": "todo", "assignee_id": member_a["id"],
+                                                           "estimated_hours": "", "due_date": ""}, token_admin)
+        self.assertEqual(status, 201, data)
+        status, data = self.request("GET", "/api/notifications", token=token_a)
+        self.assertTrue(any(item["kind"] == "assign" and item["ref_type"] == "task" for item in data["items"]), data)
+
+    def test_c_document_conflict_baseline(self):
+        token_a, _ = self.register("cf_a")
+        token_b, _ = self.register("cf_b")
+        status, data = self.request("POST", "/api/documents", {"title": "冲突文档", "category": "planning"}, token_a)
+        doc_id = data["id"]
+        status, data = self.request("GET", "/api/documents/%s" % doc_id, token=token_b)
+        base_b = data["document"].get("revision", 0)
+        # A 先保存 v1
+        status, data = self.request("PUT", "/api/documents/%s" % doc_id, {"title": "冲突文档", "content": "<p>A的版本</p>"}, token_a)
+        self.assertEqual(status, 200, data)
+        revision_a = data.get("revision")
+        self.assertTrue(revision_a, data)
+        # B 用旧基线保存 -> 409
+        status, data = self.request("PUT", "/api/documents/%s" % doc_id, {"title": "冲突文档", "content": "<p>B的版本</p>", "base_revision": base_b}, token_b)
+        self.assertEqual(status, 409, data)
+        # B 强制保存成功
+        status, data = self.request("PUT", "/api/documents/%s" % doc_id, {"title": "冲突文档", "content": "<p>B的版本</p>", "force": True}, token_b)
+        self.assertEqual(status, 200, data)
+        revision_b = data.get("revision")
+        self.assertTrue(revision_b and revision_b != revision_a, data)
+        # A 用旧版本号再保存 -> 409
+        status, data = self.request("PUT", "/api/documents/%s" % doc_id, {"title": "冲突文档", "content": "<p>A覆盖</p>", "base_revision": revision_a}, token_a)
+        self.assertEqual(status, 409, data)
+
+
 if __name__ == "__main__":
     unittest.main()

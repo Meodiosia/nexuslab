@@ -4,14 +4,20 @@ Game Jam 小队协作空间与公开团队展示页。Python 标准库 + SQLite�
 
 ## 启动本地协作服务
 
-需要 Python 3.11 或更高版本：
+需要 Python 3.11 或更高版本。核心零依赖；可选安装 `waitress` 以获得更高并发的生产服务器：
 
 ```powershell
 py server.py                       # 本机访问 http://127.0.0.1:8000/
 py server.py --host 0.0.0.0        # 局域网队友访问 http://<你的IP>:8000/
 py server.py --port 9000 --host 0.0.0.0
 py server.py --db D:\data\nexus.db --uploads D:\data\uploads   # 自定义数据目录
+py server.py --backup-minutes 30   # 每 30 分钟自动备份（默认 60，0 关闭）
+py server.py --backup-dir D:\data\backups
 ```
+
+- 自动备份默认写到数据库同目录的 `backups/`，保留最近 24 份。
+- 若安装了 waitress（`pip install waitress`）则自动使用；否则回退标准库 `ThreadingHTTPServer`。
+- 所有响应带安全头：`Content-Security-Policy`、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy`。
 
 服务端会自动创建数据库与 `uploads/`（含 `uploads/assets/`），保存：
 
@@ -27,7 +33,10 @@ py server.py --db D:\data\nexus.db --uploads D:\data\uploads   # 自定义数据
 - 「项目概览」聚合统计：成员/任务/文档/动态计数、任务进度环、按状态与类型分布、最近动态/文档/任务
 - **创意中心分页**（每页 50 条 +「加载更多」）与 **搜索**：动态、任务、文档均支持关键字过滤
 - **实时协作（SSE）**：动态/评论/点赞、看板、文档、素材、成员与项目设置变更会实时推送给在线成员；侧栏与创意中心显示**在线成员**；无需 WebSocket 即可获得自动重连的实时刷新
+- **通知中心**：评论/动态里用 `@成员ID` 会通知对方（铃铛 + 未读角标），任务指派变更也会通知被指派者；支持逐条/全部已读
+- **文档并发冲突保护**：保存携带版本基线，其他成员已保存时返回 409，前端弹出横幅可选择「载入最新版本」或「以我的版本保存」
 - **最小角色体系**：`admin`（首位注册者自动成为管理员，可在成员页改角色/移除成员）、`member`（默认，可读写）、`viewer`（只读，服务端拦截全部写操作）
+- **邀请注册（可选）**：管理员在项目设置开启「仅限邀请注册」后自动生成邀请码，支持轮换；新成员注册需输入邀请码
 - 移动端（≤560px）自动切换为顶部横向视图导航
 
 ## 安全性

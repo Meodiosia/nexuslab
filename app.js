@@ -113,7 +113,9 @@ function api(path, options = {}) {
     }
     if (!response.ok) {
       if (response.status === 401 && sessionToken) clearAuth();
-      throw new Error(data.error || '请求失败');
+      const error = new Error(data.error || '请求失败');
+      error.status = response.status;
+      throw error;
     }
     return data;
   });
@@ -200,6 +202,9 @@ function handleServerEvent(type, data) {
     case 'idea':
       throttledEvent('idea', () => { if (currentView === 'ideas') refreshIdeas(); });
       break;
+    case 'notify':
+      throttledEvent('notify', () => loadNotifications());
+      break;
     case 'task':
       throttledEvent('task', () => {
         refreshOverview();
@@ -207,7 +212,12 @@ function handleServerEvent(type, data) {
       });
       break;
     case 'doc': {
-      if (activeDocument && payload.action === 'update' && Number(payload.id) === activeDocument.id) break;
+      const actor = payload.actor != null ? Number(payload.actor) : null;
+      if (currentMember && actor === Number(currentMember.id)) break; // 自己触发的操作本地已处理
+      if (activeDocument && payload.action === 'update' && Number(payload.id) === activeDocument.id) {
+        showDocConflict('该文档刚被其他成员保存了新的版本。', false);
+        break;
+      }
       if (currentView === 'document' || currentView === 'environment') {
         loadDocuments(payload.category === 'environment' ? 'environment' : 'planning');
       }
@@ -251,6 +261,101 @@ function disconnectRealtime() {
   }
   clearPresence();
 }
+
+/* ---- 通知中心 ---- */
+let notificationUnread = 0;
+const notifyRefLabels = { idea: '动态', comment: '评论', task: '任务', mention: '提及', assign: '指派' };
+
+function renderNotifyBadge() {
+  const badge = document.querySelector('#notify-badge');
+  if (!badge) return;
+  badge.hidden = !notificationUnread;
+  badge.textContent = notificationUnread > 99 ? '99+' : String(notificationUnread);
+}
+
+function loadNotifications() {
+  return api('/api/notifications').then((data) => {
+    renderNotificationItems(data.items || []);
+    notificationUnread = data.unread || 0;
+    renderNotifyBadge();
+  }).catch(() => {});
+}
+
+function renderNotificationItems(items) {
+  const list = document.querySelector('#notify-list');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<li class="notify-empty">还没有通知</li>';
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const kindLabel = notifyRefLabels[item.ref_type] || item.ref_type;
+    return `<li class="${item.is_read ? 'read' : ''}"><button type="button" data-notify-item="${item.id}" data-notify-ref="${item.ref_type}" data-notify-ref-id="${item.ref_id || ''}"><b>${item.is_read ? '' : '● '}${escapeHtml(item.text)}</b><small>${escapeHtml(kindLabel)} · ${formatDocumentTime(item.created_at)}</small></button></li>`;
+  }).join('');
+  list.querySelectorAll('[data-notify-item]').forEach((button) => button.addEventListener('click', () => {
+    api('/api/notifications/read', { method: 'POST', body: JSON.stringify({ ids: [Number(button.dataset.notifyItem)] }) }).then(() => loadNotifications()).catch(() => {});
+    document.querySelector('#notify-panel').hidden = true;
+    const refType = button.dataset.notifyRef;
+    if (refType === 'task') switchView('tasks');
+    else if (refType === 'idea' || refType === 'comment') switchView('ideas');
+  }));
+}
+
+function markAllNotificationsRead() {
+  api('/api/notifications/read', { method: 'POST', body: JSON.stringify({ all: true }) }).then(() => loadNotifications()).catch(() => {});
+}
+
+function toggleNotifyPanel() {
+  const panel = document.querySelector('#notify-panel');
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) loadNotifications();
+}
+
+/* ---- 文档冲突 ---- */
+let activeDocRevision = null;
+let docConflict = false;
+let docConflictForce = false;
+
+function hideDocConflict() {
+  const bar = document.querySelector('#doc-conflict');
+  if (bar) bar.hidden = true;
+  docConflict = false;
+}
+
+function showDocConflict(message, canForce) {
+  docConflict = true;
+  docConflictForce = Boolean(canForce);
+  const bar = document.querySelector('#doc-conflict');
+  if (!bar) return;
+  document.querySelector('#doc-conflict-text').textContent = message;
+  document.querySelector('[data-conflict-force]').hidden = !canForce;
+  bar.hidden = false;
+}
+
+document.querySelector('#doc-conflict') && (() => {
+  const panel = document.querySelector('#notify-panel');
+  document.querySelector('#notify-button').addEventListener('click', (event) => { event.stopPropagation(); toggleNotifyPanel(); });
+  document.querySelector('[data-notify-close]').addEventListener('click', () => { panel.hidden = true; });
+  document.querySelector('#notify-mark-read').addEventListener('click', markAllNotificationsRead);
+  document.querySelector('[data-conflict-reload]').addEventListener('click', () => {
+    if (!activeDocument) return;
+    clearTimeout(documentSaveTimer);
+    openDocument(activeDocument.id, activeDocument.category);
+  });
+  document.querySelector('[data-conflict-force]').addEventListener('click', () => {
+    if (!activeDocument) return;
+    clearTimeout(documentSaveTimer);
+    saveActiveDocument({ force: true });
+  });
+  document.querySelector('[data-conflict-dismiss]').addEventListener('click', hideDocConflict);
+})();
+
+document.addEventListener('click', (event) => {
+  const panel = document.querySelector('#notify-panel');
+  if (!panel.hidden && !panel.contains(event.target) && !document.querySelector('#notify-button').contains(event.target)) {
+    panel.hidden = true;
+  }
+});
 
 function renderIdeas(ideas, updateSource = true) {
   if (updateSource) allIdeas = ideas;
@@ -387,13 +492,15 @@ function refreshMembers() {
 }
 
 function applyProject(project) {
-  currentProject = project || { name: '', icon: '' };
+  currentProject = Object.assign({ name: '', icon: '', require_invite: false, invite_code: '' }, project || {});
+  currentProject.require_invite = Boolean(currentProject.require_invite);
   const name = currentProject.name || '未命名项目';
   document.querySelector('#sidebar-project-name').textContent = name;
   document.querySelector('#public-project-name').textContent = currentProject.name || '等待创建';
   const sidebarIcon = document.querySelector('#sidebar-project-icon');
   sidebarIcon.innerHTML = currentProject.icon ? `<img src="${escapeHtml(currentProject.icon)}" alt="${escapeHtml(name)} 的项目图标">` : '';
   sidebarIcon.classList.toggle('project-icon-empty', !currentProject.icon);
+  updateInviteFieldVisibility();
 }
 
 function refreshProject() {
@@ -543,6 +650,7 @@ document.querySelectorAll('[data-auth-mode]').forEach((button) => button.addEven
   document.querySelector('#auth-description').textContent = authMode === 'register' ? '创建公开团队身份，注册后会自动显示在首页成员区。' : '使用名称 ID 和密码登录。发布内容会显示你的公开身份。';
   loginSubmit.firstChild.textContent = authMode === 'register' ? '创建并登录 ' : '登录并继续 ';
   accountPassword.autocomplete = authMode === 'register' ? 'new-password' : 'current-password';
+  updateInviteFieldVisibility();
 }));
 registerBio.addEventListener('input', () => { document.querySelector('#bio-count').textContent = registerBio.value.length; });
 
@@ -551,13 +659,15 @@ loginSubmit.addEventListener('click', () => {
   const password = accountPassword.value;
   if (!realId || !password) return;
   const path = authMode === 'register' ? '/api/register' : '/api/login';
-  api(path, { method: 'POST', body: JSON.stringify({ real_id: realId, password, bio: registerBio.value.trim() }) }).then((data) => {
+  const inviteCodeInput = document.querySelector('#register-invite-code');
+  api(path, { method: 'POST', body: JSON.stringify({ real_id: realId, password, bio: registerBio.value.trim(), invite_code: inviteCodeInput ? inviteCodeInput.value.trim() : '' }) }).then((data) => {
     setMember(data.member, data.token);
     loginDialog.close();
     refreshIdeas();
     refreshMembers();
     refreshOverview();
     connectRealtime();
+    loadNotifications();
   }).catch((error) => { loginMessage.textContent = error.message; });
 });
 loginForm.addEventListener('submit', (event) => { event.preventDefault(); loginSubmit.click(); });
@@ -569,6 +679,12 @@ logoutButton.addEventListener('click', () => {
     serverState.textContent = '未登录';
     loginMessage.textContent = '已退出登录';
     disconnectRealtime();
+    notificationUnread = 0;
+    renderNotifyBadge();
+    const notifyList = document.querySelector('#notify-list');
+    if (notifyList) notifyList.innerHTML = '';
+    const notifyPanel = document.querySelector('#notify-panel');
+    if (notifyPanel) notifyPanel.hidden = true;
     refreshIdeas();
     refreshMembers();
     refreshOverview();
@@ -579,7 +695,10 @@ refreshIdeas();
 refreshMembers();
 refreshProject();
 refreshOverview();
-if (sessionToken) connectRealtime();
+if (sessionToken) {
+  connectRealtime();
+  loadNotifications();
+}
 
 ['filter-member', 'filter-time', 'filter-type'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', applyIdeaFilters));
 const ideaSearchInput = document.querySelector('#idea-search');
@@ -642,6 +761,13 @@ document.querySelector('#profile-save').addEventListener('click', () => {
   }).finally(() => { saveButton.disabled = false; });
 });
 
+let pendingInviteRotate = false;
+
+function updateInviteFieldVisibility() {
+  const field = document.querySelector('#invite-field');
+  if (field) field.hidden = !(currentProject.require_invite && authMode === 'register');
+}
+
 document.querySelector('[data-open-project-settings]').addEventListener('click', () => {
   if (!requireLogin()) return;
   if (!canWrite()) { saveState.textContent = '只读成员不能修改项目设置'; return; }
@@ -650,6 +776,18 @@ document.querySelector('[data-open-project-settings]').addEventListener('click',
   projectIconInput.value = '';
   projectIconPreview.innerHTML = pendingProjectIcon ? `<img src="${escapeHtml(pendingProjectIcon)}" alt="当前项目图标">` : '◇';
   projectIconPreview.classList.toggle('has-image', Boolean(pendingProjectIcon));
+  const isAdminUser = currentMember && currentMember.role === 'admin';
+  const inviteSettings = document.querySelector('#invite-settings');
+  const enableInput = document.querySelector('#project-invite-enable');
+  if (inviteSettings) inviteSettings.hidden = !isAdminUser;
+  if (enableInput) enableInput.checked = Boolean(currentProject.require_invite);
+  pendingInviteRotate = false;
+  const codeRow = document.querySelector('#invite-code-row');
+  const codeEl = document.querySelector('#project-invite-code');
+  if (codeRow && codeEl) {
+    codeRow.hidden = !(isAdminUser && currentProject.require_invite && currentProject.invite_code);
+    codeEl.textContent = currentProject.invite_code || '';
+  }
   projectSettingsMessage.textContent = currentProject.name ? '修改后将同步给所有成员' : '请设置项目名称和图标';
   projectSettingsDialog.showModal();
   projectNameInput.focus();
@@ -672,13 +810,36 @@ document.querySelector('#save-project-settings').addEventListener('click', () =>
   const button = document.querySelector('#save-project-settings');
   button.disabled = true;
   projectSettingsMessage.textContent = '正在保存项目设置...';
-  api('/api/project', { method: 'POST', body: JSON.stringify({ name, icon: pendingProjectIcon }) }).then((data) => {
+  const requireInvite = Boolean(document.querySelector('#project-invite-enable') && document.querySelector('#project-invite-enable').checked);
+  api('/api/project', { method: 'POST', body: JSON.stringify({ name, icon: pendingProjectIcon, require_invite: requireInvite, rotate_code: pendingInviteRotate }) }).then((data) => {
     applyProject(data.project);
     projectSettingsMessage.textContent = '项目设置已保存';
     setTimeout(() => projectSettingsDialog.close(), 350);
   }).catch((error) => { projectSettingsMessage.textContent = error.message; }).finally(() => { button.disabled = false; });
 });
 document.querySelector('#project-settings-form').addEventListener('submit', (event) => { event.preventDefault(); document.querySelector('#save-project-settings').click(); });
+document.querySelector('#project-invite-enable').addEventListener('change', (event) => {
+  const row = document.querySelector('#invite-code-row');
+  if (row) {
+    if (!event.target.checked) row.hidden = true;
+    else if (currentProject.invite_code) {
+      document.querySelector('#project-invite-code').textContent = currentProject.invite_code;
+      row.hidden = false;
+    } else {
+      row.hidden = true;
+      pendingInviteRotate = true;
+    }
+  }
+});
+document.querySelector('#project-invite-rotate').addEventListener('click', () => {
+  pendingInviteRotate = true;
+  document.querySelector('#project-invite-code').textContent = '将在保存时生成新码…';
+  projectSettingsMessage.textContent = '已标记重新生成，点击保存生效';
+});
+document.querySelector('#project-invite-copy').addEventListener('click', () => {
+  const code = document.querySelector('#project-invite-code').textContent || '';
+  navigator.clipboard && navigator.clipboard.writeText(code).then(() => { projectSettingsMessage.textContent = '邀请码已复制'; }).catch(() => {});
+});
 
 /* ---- 素材资产 ---- */
 const assetCategoryLabels = { visual: '视觉', audio: '音频', build: '构建', other: '其他' };
@@ -846,6 +1007,9 @@ document.querySelectorAll('[data-doc-search]').forEach((input) => input.addEvent
 function openDocument(id, category) {
   api(`/api/documents/${id}`).then((data) => {
     activeDocument = data.document;
+    activeDocRevision = data.document.revision != null ? Number(data.document.revision) : null;
+    docConflict = false;
+    hideDocConflict();
     const panel = document.querySelector(`[data-view-panel="${category === 'environment' ? 'environment' : 'document'}"]`);
     panel.querySelector('.document-library').hidden = true;
     const editorShell = panel.querySelector('.document-editor');
@@ -930,6 +1094,9 @@ function leaveDocumentEditor(category) {
   }
   activeDocument = null;
   activeDocumentEditor = null;
+  activeDocRevision = null;
+  docConflict = false;
+  hideDocConflict();
   loadDocuments(category || 'planning');
 }
 
@@ -978,7 +1145,7 @@ document.querySelectorAll('[data-doc-duplicate]').forEach((button) => button.add
 document.querySelectorAll('[data-doc-export]').forEach((button) => button.addEventListener('click', exportActiveDocument));
 document.querySelectorAll('[data-doc-delete]').forEach((button) => button.addEventListener('click', deleteActiveDocument));
 
-function saveActiveDocument() {
+function saveActiveDocument(options = {}) {
   if (!activeDocument || !activeDocumentEditor || !canWrite()) return;
   const titleNode = activeDocumentEditor.querySelector('h1');
   const title = titleNode?.textContent.trim() || activeDocument.title;
@@ -986,14 +1153,32 @@ function saveActiveDocument() {
   clone.querySelector('h1')?.remove();
   const state = activeDocumentEditor.closest('.document-editor').querySelector('.document-save-state') || document.querySelector('#document-save-state');
   state.textContent = '正在保存...';
-  api(`/api/documents/${activeDocument.id}`, { method: 'PUT', body: JSON.stringify({ title, content: clone.innerHTML }) }).then(() => {
+  const body = { title, content: clone.innerHTML };
+  if (options.force) {
+    body.force = true;
+  } else {
+    body.base_revision = activeDocRevision || null;
+  }
+  api(`/api/documents/${activeDocument.id}`, { method: 'PUT', body: JSON.stringify(body) }).then((data) => {
+    activeDocRevision = data.revision != null ? Number(data.revision) : activeDocRevision;
+    docConflict = false;
+    hideDocConflict();
     state.textContent = `已保存 · ${currentMember.real_id}`;
-  }).catch((error) => { state.textContent = error.message; });
+  }).catch((error) => {
+    if (error.status === 409) {
+      docConflict = true;
+      showDocConflict('保存冲突：文档已被其他成员修改。选择「载入最新版本」或「以我的版本保存」。', true);
+      state.textContent = '保存冲突，待处理';
+    } else {
+      state.textContent = error.message;
+    }
+  });
 }
 
 document.querySelectorAll('.editor-page').forEach((documentEditor) => documentEditor.addEventListener('input', () => {
+  if (docConflict) return;
   clearTimeout(documentSaveTimer);
-  documentSaveTimer = setTimeout(saveActiveDocument, 900);
+  documentSaveTimer = setTimeout(() => saveActiveDocument(), 900);
 }));
 document.querySelectorAll('[data-command]').forEach((button) => button.addEventListener('click', () => {
   if (!activeDocumentEditor) return;
@@ -1068,6 +1253,10 @@ if (docImageInput) {
 document.querySelectorAll('[data-back-documents]').forEach((button) => button.addEventListener('click', () => {
   const panel = button.closest('.workspace-view');
   const category = panel.dataset.viewPanel === 'environment' ? 'environment' : 'planning';
+  if (docConflict && activeDocument) {
+    window.alert('文档存在未解决的保存冲突，请先在冲突横幅中选择「载入最新版本」或「以我的版本保存」。');
+    return;
+  }
   clearTimeout(documentSaveTimer);
   saveActiveDocument();
   panel.querySelector('.document-editor').hidden = true;
