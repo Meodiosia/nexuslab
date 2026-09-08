@@ -184,6 +184,8 @@ function updateAuthButtons() {
   const logged = Boolean(currentMember && sessionToken);
   if (loginOpenButton) loginOpenButton.hidden = logged;
   if (logoutButton) logoutButton.hidden = !logged;
+  const bell = document.querySelector('#notify-button');
+  if (bell) bell.hidden = !logged;
 }
 
 function clearAuth() {
@@ -397,6 +399,7 @@ document.querySelector('#doc-conflict') && (() => {
   document.querySelector('#notify-button').addEventListener('click', (event) => { event.stopPropagation(); toggleNotifyPanel(); });
   document.querySelector('[data-notify-close]').addEventListener('click', () => { panel.hidden = true; });
   document.querySelector('#notify-mark-read').addEventListener('click', markAllNotificationsRead);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !panel.hidden) panel.hidden = true; });
   document.querySelector('[data-conflict-reload]').addEventListener('click', () => {
     if (!activeDocument) return;
     clearTimeout(documentSaveTimer);

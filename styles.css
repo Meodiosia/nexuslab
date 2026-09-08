@@ -229,3 +229,8 @@ body>footer{background:#090b12;color:#747a87}
 /* editor format buttons active state */
 .doc-toolbar [data-command].active{background:#e6ecc6;color:#4a5318;box-shadow:inset 0 -1px 0 #9db92e}
 time.reltime{white-space:nowrap}
+
+/* honor hidden attr over display:flex widgets */
+.notify-panel[hidden],.doc-conflict[hidden],#notify-panel[hidden],#doc-conflict[hidden]{display:none!important}
+.notify-button{display:inline-flex;align-items:center;justify-content:center}
+.bell-icon{width:15px;height:15px}
