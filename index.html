@@ -114,11 +114,15 @@
         <div class="workspace-bottom"><span>当前会话</span><div class="online-stack" id="online-members"></div><small><b></b> 等待成员登录</small></div>
       </aside>
       <section class="workspace-main">
-        <header class="workspace-header"><div><span>项目空间</span><b>/</b><strong id="view-title">项目概览</strong></div><div class="header-actions"><span class="server-state" id="server-state">等待连接</span><span class="save-state" id="save-state">所有更改已保存</span><button type="button" data-open-profile>个人资料</button><button type="button" data-open-login>账号登录</button><button type="button" data-logout hidden>退出登录</button><button type="button" data-share>分享</button><span class="user-avatar avatar-placeholder" id="current-user-avatar"></span><button type="button" class="notify-button" id="notify-button" aria-label="通知" title="通知" hidden><svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg><b class="notify-badge" id="notify-badge" hidden>0</b></button></div>
+        <header class="workspace-header"><div><span>项目空间</span><b>/</b><strong id="view-title">项目概览</strong></div><div class="header-actions"><span class="server-state" id="server-state">等待连接</span><span class="save-state" id="save-state">所有更改已保存</span><button type="button" data-open-profile>个人资料</button><button type="button" data-open-login>账号登录</button><button type="button" data-logout hidden>退出登录</button><button type="button" data-share>分享</button><span class="user-avatar avatar-placeholder" id="current-user-avatar"></span><button type="button" class="search-button" id="search-button" aria-label="全局搜索" title="全局搜索"><svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg></button><button type="button" class="notify-button" id="notify-button" aria-label="通知" title="通知" hidden><svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg><b class="notify-badge" id="notify-badge" hidden>0</b></button></div>
         <div class="notify-panel" id="notify-panel" hidden>
           <header><b>通知</b><button type="button" data-notify-close aria-label="关闭">×</button></header>
           <ul id="notify-list"></ul>
-          <footer><button type="button" id="notify-mark-read">全部标为已读</button></footer>
+          <footer><button type="button" id="notify-toggle-perm">开启浏览器提醒</button><button type="button" id="notify-mark-read">全部标为已读</button></footer>
+        </div>
+        <div class="search-panel" id="search-panel" hidden>
+          <header><input id="search-input" type="search" placeholder="搜索动态、文档、任务…" autocomplete="off" aria-label="全局搜索"><button type="button" data-search-close aria-label="关闭">×</button></header>
+          <div class="search-results" id="search-results"><p class="search-hint">输入关键词查找动态 / 文档 / 任务</p></div>
         </div></header>
         <nav class="mobile-view-nav" aria-label="工作台视图切换">
           <button class="active" type="button" data-view="overview"><span>⌂</span>概览</button>
@@ -137,6 +141,7 @@
         </div>
 
         <div class="workspace-view active" data-view-panel="overview">
+          <div class="announce" id="announce-bar" hidden><b>公告</b><span id="announce-text"></span></div>
           <div class="view-intro">
             <div><p>GAME JAM WORKSPACE</p><h2 id="workspace-greeting">项目尚未启动</h2><span id="overview-subline">创建账号并添加真实内容后，项目状态会显示在这里。</span></div>
             <div class="progress-ring empty" id="overview-progress" style="--p:0"><b id="overview-progress-num">--</b><span id="overview-progress-label">任务完成率</span></div>
@@ -166,7 +171,7 @@
             <div class="document-list" data-document-list="planning"><div class="document-empty">还没有策划文档</div></div>
           </div>
           <div class="document-editor" hidden>
-            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 文档库</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span id="document-save-state">尚未保存</span></div>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 文档库</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="editing-hint" hidden></span><span id="document-save-state">尚未保存</span></div>
             <div class="document-layout"><article class="editor-page" id="editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div id="document-history-list"></div></aside></div>
           </div>
         </div>
@@ -177,7 +182,7 @@
             <div class="document-list" data-document-list="environment"><div class="document-empty">还没有环境安装指南</div></div>
           </div>
           <div class="document-editor" hidden>
-            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 指南列表</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="document-save-state">尚未保存</span></div>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 指南列表</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-image>插图</button><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="editing-hint" hidden></span><span class="document-save-state">尚未保存</span></div>
             <div class="document-layout"><article class="editor-page environment-editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div class="document-history-list"></div></aside></div>
           </div>
         </div>
@@ -287,6 +292,11 @@
       <div class="invite-settings" id="invite-settings" hidden>
         <label class="invite-row" for="project-invite-enable"><span><b>仅限邀请注册</b><small>开启后新成员注册需要输入邀请码</small></span><input type="checkbox" id="project-invite-enable"></label>
         <div class="invite-code-row" id="invite-code-row" hidden><code id="project-invite-code"></code><div><button type="button" id="project-invite-rotate">重新生成</button><button type="button" id="project-invite-copy">复制</button></div></div>
+      </div>
+      <div class="announce-admin" id="announce-admin" hidden>
+        <label for="announce-input">团队公告（显示在工作台概览顶部）</label>
+        <textarea id="announce-input" rows="2" maxlength="500" placeholder="例如：明晚 8 点前提交可玩构建…"></textarea>
+        <div class="announce-admin-actions"><button type="button" id="announce-save">发布公告</button><button type="button" id="announce-clear">清除公告</button></div>
       </div>
       <button class="login-submit" type="button" id="save-project-settings">保存项目设置 <b>↗</b></button><small id="project-settings-message"></small>
     </form>

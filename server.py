@@ -81,9 +81,28 @@ def subscribe_stream(member_id):
 
 
 def unsubscribe_stream(stream_queue):
+    member_id = None
     with _EVENT_LOCK:
+        target = next((item for item in _SUBSCRIBERS if item["queue"] is stream_queue), None)
+        if not target:
+            return
         _SUBSCRIBERS[:] = [item for item in _SUBSCRIBERS if item["queue"] is not stream_queue]
+        member_id = target["member_id"]
+        remaining = sum(1 for item in _SUBSCRIBERS if item["member_id"] == member_id)
+    if member_id is not None and remaining == 0:
+        for doc_id in clear_member_editing(member_id):
+            broadcast("doc.editing", {"id": doc_id, "members": editing_members_for(doc_id)})
     push_presence()
+
+
+def broadcast_doc_editing(doc_id):
+    broadcast("doc.editing", {"id": doc_id, "members": editing_members_for(doc_id)})
+
+
+def stop_editing_if_present(doc_id, member_id):
+    if member_id in (editing_snapshot().get(doc_id) or []):
+        set_doc_editing(doc_id, member_id, False)
+        broadcast_doc_editing(doc_id)
 
 
 def _event_lines(payload):
@@ -194,6 +213,75 @@ def push_presence():
     for item in online:
         item["avatar"] = item.get("avatar") or ""
     broadcast("presence", {"online": online, "online_ids": [item["id"] for item in online]})
+
+
+# ---- 文档“正在编辑”状态（轻量提示，不互斥） ----
+_EDITING_TTL = 75  # 秒；超过视为已离开
+_EDIT_LOCK = threading.RLock()  # 可重入：内部帮助函数可能在同一线程再次加锁
+_EDITING_BY_DOC = {}   # doc_id -> {member_id: time.monotonic()}
+_EDITOR_DOCS = {}      # member_id -> set(doc_id)
+
+
+def _editing_remove_doc(doc_id, member_id):
+    with _EDIT_LOCK:
+        editors = _EDITING_BY_DOC.get(doc_id)
+        if editors:
+            editors.pop(member_id, None)
+            if not editors:
+                _EDITING_BY_DOC.pop(doc_id, None)
+        docs = _EDITOR_DOCS.get(member_id)
+        if docs:
+            docs.discard(doc_id)
+            if not docs:
+                _EDITOR_DOCS.pop(member_id, None)
+
+
+def editing_snapshot():
+    """返回 {doc_id: [member_id, ...]}，并惰性清理过期条目。"""
+    now = time.monotonic()
+    with _EDIT_LOCK:
+        for doc_id in list(_EDITING_BY_DOC.keys()):
+            stale = [member_id for member_id, at in _EDITING_BY_DOC[doc_id].items() if now - at > _EDITING_TTL]
+            for member_id in stale:
+                _EDITING_BY_DOC[doc_id].pop(member_id, None)
+                docs = _EDITOR_DOCS.get(member_id)
+                if docs:
+                    docs.discard(doc_id)
+            if not _EDITING_BY_DOC[doc_id]:
+                _EDITING_BY_DOC.pop(doc_id, None)
+        for member_id in list(_EDITOR_DOCS.keys()):
+            if not _EDITOR_DOCS[member_id]:
+                _EDITOR_DOCS.pop(member_id, None)
+    return {doc_id: list(members) for doc_id, members in _EDITING_BY_DOC.items()}
+
+
+def set_doc_editing(doc_id, member_id, active):
+    with _EDIT_LOCK:
+        if active:
+            _EDITING_BY_DOC.setdefault(doc_id, {})[member_id] = time.monotonic()
+            _EDITOR_DOCS.setdefault(member_id, set()).add(doc_id)
+        else:
+            _editing_remove_doc(doc_id, member_id)
+
+
+def clear_member_editing(member_id):
+    with _EDIT_LOCK:
+        docs = list(_EDITOR_DOCS.pop(member_id, set()))
+    for doc_id in docs:
+        _editing_remove_doc(doc_id, member_id)
+    return docs
+
+
+def editing_members_for(doc_id):
+    ids = editing_snapshot().get(doc_id) or []
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT id, real_id FROM members WHERE id IN (%s) ORDER BY id ASC" % placeholders, ids
+        ).fetchall()
+    return [{"id": row["id"], "name": row["real_id"]} for row in rows]
 
 
 def hash_password(password, salt=None):
@@ -313,6 +401,7 @@ def init_db():
             updated_by INTEGER,
             require_invite INTEGER NOT NULL DEFAULT 0,
             invite_code TEXT NOT NULL DEFAULT '',
+            announcement TEXT NOT NULL DEFAULT '',
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(updated_by) REFERENCES members(id) ON DELETE SET NULL
         );
@@ -361,6 +450,8 @@ def init_db():
         connection.execute("ALTER TABLE project_settings ADD COLUMN require_invite INTEGER NOT NULL DEFAULT 0")
     if "invite_code" not in settings_columns:
         connection.execute("ALTER TABLE project_settings ADD COLUMN invite_code TEXT NOT NULL DEFAULT ''")
+    if "announcement" not in settings_columns:
+        connection.execute("ALTER TABLE project_settings ADD COLUMN announcement TEXT NOT NULL DEFAULT ''")
     idea_columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)").fetchall()}
     if "idea_type" not in idea_columns:
         connection.execute("ALTER TABLE ideas ADD COLUMN idea_type TEXT NOT NULL DEFAULT 'gameplay'")
@@ -1050,11 +1141,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/project":
             member_id = self.member(False)
             with db() as connection:
-                row = connection.execute("SELECT name, icon, updated_at, require_invite, invite_code FROM project_settings WHERE id = 1").fetchone()
+                row = connection.execute("SELECT name, icon, updated_at, require_invite, invite_code, announcement FROM project_settings WHERE id = 1").fetchone()
             if not row:
-                return self.json_response({"project": {"name": "", "icon": "", "updated_at": None, "require_invite": False}})
+                return self.json_response({"project": {"name": "", "icon": "", "updated_at": None, "require_invite": False, "announcement": ""}})
             project = dict(row)
             project["require_invite"] = bool(project.get("require_invite"))
+            project["announcement"] = project.get("announcement") or ""
             role = self.member_role(member_id) if member_id else ""
             if role != "admin":
                 project["invite_code"] = ""
@@ -1261,6 +1353,50 @@ class Handler(BaseHTTPRequestHandler):
                 item["avatar"] = item.get("avatar") or ""
                 items.append(item)
             return self.json_response({"assets": items, "total": total})
+        if path == "/api/editing":
+            snapshot = editing_snapshot()
+            member_ids = sorted({member_id for members in snapshot.values() for member_id in members})
+            names = {}
+            if member_ids:
+                placeholders = ",".join("?" * len(member_ids))
+                with db() as connection:
+                    rows = connection.execute(
+                        "SELECT id, real_id FROM members WHERE id IN (%s)" % placeholders, member_ids
+                    ).fetchall()
+                names = {row["id"]: row["real_id"] for row in rows}
+            edits = {
+                doc_id: [{"id": member_id, "name": names.get(member_id, str(member_id))} for member_id in members]
+                for doc_id, members in snapshot.items()
+            }
+            return self.json_response({"edits": edits})
+        if path == "/api/search":
+            keyword = parse_qs(parsed.query).get("q", [""])[0].strip()
+            if not keyword or len(keyword) > 60:
+                return self.json_response({"ideas": [], "documents": [], "tasks": []})
+            escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like = "%" + escaped + "%"
+            with db() as connection:
+                ideas = connection.execute("""
+                    SELECT ideas.id, ideas.content, ideas.idea_type, ideas.created_at, members.real_id AS name
+                    FROM ideas JOIN members ON members.id = ideas.member_id
+                    WHERE ideas.content LIKE ? ESCAPE '\\'
+                    ORDER BY ideas.created_at DESC, ideas.id DESC LIMIT 5
+                """, (like,)).fetchall()
+                documents = connection.execute("""
+                    SELECT id, title, category, updated_at FROM documents
+                    WHERE title LIKE ? ESCAPE '\\'
+                    ORDER BY updated_at DESC, id DESC LIMIT 5
+                """, (like,)).fetchall()
+                tasks = connection.execute("""
+                    SELECT id, title, status, task_type, priority FROM tasks
+                    WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'
+                    ORDER BY updated_at DESC, id DESC LIMIT 5
+                """, (like, like)).fetchall()
+            return self.json_response({
+                "ideas": [dict(row) for row in ideas],
+                "documents": [dict(row) for row in documents],
+                "tasks": [dict(row) for row in tasks],
+            })
         self.serve_static(path)
 
     def do_POST(self):
@@ -1427,6 +1563,25 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 return self.json_response({"error": str(error)}, 400)
             return self.json_response({"url": url}, 201)
+        if path == "/api/announcement":
+            member_id = self.member()
+            if not member_id:
+                return
+            if not self.require_admin(member_id):
+                return
+            text = str(payload.get("text", "")).strip()
+            if len(text) > 500:
+                return self.json_response({"error": "公告不能超过 500 字"}, 400)
+            with db() as connection:
+                connection.execute("""
+                    INSERT INTO project_settings (id, name, icon, updated_by, require_invite, invite_code, announcement, updated_at)
+                    VALUES (1, '', '', ?, 0, '', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET announcement=excluded.announcement,
+                      updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP
+                """, (member_id, text))
+                connection.commit()
+            broadcast("announce", {"announcement": text})
+            return self.json_response({"announcement": text})
         if path == "/api/project":
             member_id = self.member()
             if not member_id:
@@ -1534,6 +1689,23 @@ class Handler(BaseHTTPRequestHandler):
             broadcast("task", {"action": "changed", "id": cursor.lastrowid})
             notify_assignee(member_id, task.get("assignee_id"), cursor.lastrowid)
             return self.json_response({"id": cursor.lastrowid}, 201)
+        edit_parts = path.strip("/").split("/")
+        if len(edit_parts) == 4 and edit_parts[0] == "api" and edit_parts[1] == "documents" and edit_parts[3] == "editing":
+            try:
+                document_id = int(edit_parts[2])
+            except ValueError:
+                return self.json_response({"error": "文档不存在"}, 404)
+            active = bool(payload.get("active"))
+            with db() as connection:
+                if not connection.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone():
+                    if not active:
+                        return self.json_response({"ok": True})
+                    return self.json_response({"error": "文档不存在"}, 404)
+            if active and not self.require_writer(member_id):
+                return
+            set_doc_editing(document_id, member_id, active)
+            broadcast_doc_editing(document_id)
+            return self.json_response({"ok": True})
         rollback_parts = path.strip("/").split("/")
         if len(rollback_parts) == 4 and rollback_parts[0] == "api" and rollback_parts[1] == "documents" and rollback_parts[3] == "duplicate":
             try:
@@ -1670,6 +1842,7 @@ class Handler(BaseHTTPRequestHandler):
             prune_document_history(connection, document_id)
             connection.commit()
         broadcast("doc", {"action": "update", "id": document_id, "category": exists["category"], "actor": member_id})
+        stop_editing_if_present(document_id, member_id)
         return self.json_response({"saved": True, "revision": cursor.lastrowid})
 
     def do_DELETE(self):
@@ -1739,6 +1912,9 @@ class Handler(BaseHTTPRequestHandler):
                 connection.commit()
             remove_doc_images_from_html(row["content"])
             broadcast("doc", {"action": "deleted", "id": document_id, "category": row["category"], "actor": member_id})
+            for editor_id in (editing_snapshot().get(document_id) or []):
+                set_doc_editing(document_id, editor_id, False)
+            broadcast_doc_editing(document_id)
             return self.json_response({"ok": True})
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "assets":
             try:

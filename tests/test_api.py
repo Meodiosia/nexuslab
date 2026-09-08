@@ -605,5 +605,103 @@ class InviteConflictNotifyApiTest(unittest.TestCase):
         self.assertEqual(status, 409, data)
 
 
+class QuickGapsApiTest(unittest.TestCase):
+    """最后一组协作缺口：正在编辑 / 公告 / 全局搜索（独立实例）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _start_server(cls, "nexuslab_gaps_")
+        payload = json.dumps({"real_id": "gap_admin", "password": "pass123456", "bio": "管理员"}).encode("utf-8")
+        req = urllib.request.Request(cls.base + "/api/register", data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        cls.admin_token = data["token"]
+        cls.admin_id = data["member"]["id"]
+
+    @classmethod
+    def tearDownClass(cls):
+        _stop_server(cls)
+
+    def request(self, method, path, payload=None, token=None):
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(self.base + path, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("X-Session", token)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    return resp.status, raw
+        except urllib.error.HTTPError as err:
+            raw = err.read()
+            try:
+                return err.code, json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return err.code, raw
+
+    def register_helper(self, real_id):
+        status, data = self.request("POST", "/api/register", {"real_id": real_id, "password": "pass123456", "bio": ""})
+        self.assertEqual(status, 201, data)
+        return data["token"]
+
+    def test_editing_presence(self):
+        token = self.register_helper("gap_editor")
+        status, data = self.request("POST", "/api/documents", {"title": "编辑锁文档", "category": "planning"}, self.admin_token)
+        self.assertEqual(status, 201, data)
+        doc_id = data["id"]
+        status, data = self.request("POST", "/api/documents/%s/editing" % doc_id, {"active": True}, self.admin_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/editing")
+        self.assertEqual(status, 200, data)
+        self.assertIn(str(doc_id), data["edits"], data)
+        self.assertTrue(any(m["id"] == self.admin_id for m in data["edits"][str(doc_id)]), data)
+        status, data = self.request("POST", "/api/documents/%s/editing" % doc_id, {"active": False}, self.admin_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/editing")
+        self.assertNotIn(str(doc_id), data["edits"], data)
+        # 普通成员（可写）也可上报编辑状态
+        status, data = self.request("POST", "/api/documents/%s/editing" % doc_id, {"active": True}, token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("POST", "/api/documents/%s/editing" % doc_id, {"active": False}, token)
+        self.assertEqual(status, 200, data)
+
+    def test_announcement(self):
+        member_token = self.register_helper("gap_member_an")
+        text = "明晚 8 点前提交可玩构建"
+        status, data = self.request("POST", "/api/announcement", {"text": text}, self.admin_token)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["announcement"], text)
+        status, data = self.request("GET", "/api/project")
+        self.assertEqual(data["project"]["announcement"], text, data)
+        status, data = self.request("POST", "/api/announcement", {"text": "越权"}, member_token)
+        self.assertEqual(status, 403, data)
+        status, data = self.request("POST", "/api/announcement", {"text": ""}, self.admin_token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("GET", "/api/project")
+        self.assertEqual(data["project"]["announcement"], "", data)
+
+    def test_global_search(self):
+        token = self.register_helper("gap_searcher")
+        status, data = self.request("POST", "/api/ideas", {"content": "像素风独眼飞船设计", "idea_type": "concept"}, token)
+        self.assertEqual(status, 200, data)
+        status, data = self.request("POST", "/api/documents", {"title": "飞船机制文档", "category": "planning"}, token)
+        self.assertEqual(status, 201, data)
+        status, data = self.request("POST", "/api/tasks", {"title": "飞船推进器原型", "description": "测试推进手感", "task_type": "programming",
+                                                           "priority": "high", "status": "todo", "assignee_id": "", "estimated_hours": "", "due_date": ""}, token)
+        self.assertEqual(status, 201, data)
+        status, data = self.request("GET", "/api/search?q=%E9%A3%9E%E8%88%B9")
+        self.assertEqual(status, 200, data)
+        self.assertTrue(any("飞船" in idea["content"] for idea in data["ideas"]), data)
+        self.assertTrue(any("飞船" in doc["title"] for doc in data["documents"]), data)
+        self.assertTrue(any("飞船" in task["title"] for task in data["tasks"]), data)
+        status, data = self.request("GET", "/api/search?q=%25")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["ideas"], [], data)
+
+
 if __name__ == "__main__":
     unittest.main()
