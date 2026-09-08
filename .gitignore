@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 运行时数据（数据库与上传文件）
+nexuslab.db
+nexuslab.db-wal
+nexuslab.db-shm
+*.db
+uploads/
+
+# 其他
+.DS_Store
+*.bak

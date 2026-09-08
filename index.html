@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="NEXUS LAB Game Jam 团队协作与作品展示空间">
+  <title>NEXUS LAB · Game Jam Collective</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#home" aria-label="返回首页">
+      <span class="brand-mark">N/X</span>
+      <span class="brand-copy">NEXUS LAB<small>GAME MAKERS COLLECTIVE</small></span>
+    </a>
+    <nav class="main-nav" aria-label="主导航">
+      <a class="active" href="#home">项目</a>
+      <a href="#story">能力</a>
+      <a href="#team">团队</a>
+      <button class="workspace-link" type="button" data-open-workspace>进入工作台 <span>↗</span></button>
+    </nav>
+    <button class="menu-button" type="button" aria-label="打开导航" aria-expanded="false">菜单</button>
+  </header>
+
+  <main>
+    <section class="hero" id="home">
+      <div class="hero-kicker"><span></span> SYSTEM ONLINE · JAM SESSION 2026</div>
+      <div class="hero-layout">
+        <div class="hero-copy">
+          <h1>MAKE<br><em>WILD</em> IDEAS<br>PLAYABLE.</h1>
+          <p>我们是一支为 Game Jam 临时集结的跨职能小队。在有限时间里，把最冒险的想法压缩成真正能玩的游戏。</p>
+          <div class="hero-actions">
+            <button class="primary-button" type="button" data-open-workspace>查看制作进度 <span>→</span></button>
+            <a class="text-link" href="#story">探索团队能力 <span>↓</span></a>
+          </div>
+        </div>
+        <div class="hero-art" aria-label="NEXUS LAB 动态能量核心">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="core"><span>N/X</span></div>
+          <div class="scan-line"></div>
+          <div class="system-label label-a">CREATIVE SIGNAL<br><b>98.7%</b></div>
+          <div class="system-label label-b">TEAM NODE<br><b>READY</b></div>
+          <p>NEXUS LAB<br><span>CREATIVE WORKSPACE</span></p>
+        </div>
+      </div>
+      <div class="project-strip">
+        <div><span>当前项目</span><strong id="public-project-name">等待创建</strong></div>
+        <div><span>目标平台</span><strong>尚未设置</strong></div>
+        <div><span>当前阶段</span><strong class="status"><i></i> 等待启动</strong></div>
+        <div><span>Jam 截止</span><strong>尚未设置</strong></div>
+      </div>
+    </section>
+
+    <section class="story-section" id="story">
+      <div class="section-index">01 / CAPABILITIES</div>
+      <div class="story-heading">
+        <p class="eyebrow">我们的工作方式</p>
+        <h2>快速碰撞。<br>大胆试错。准时交付。</h2>
+      </div>
+      <div class="story-grid">
+        <blockquote>
+          “限制不是边界，<br>而是创意的加速器。”
+          <cite>— NEXUS LAB / FIELD MANIFESTO</cite>
+        </blockquote>
+        <div class="story-copy">
+          <p>从第一张便利贴到最终构建，我们用短迭代快速验证核心乐趣。策划、美术、程序和音频从第一小时开始并行，而不是等待上一个环节完成。</p>
+          <p>团队空间集中管理决策、任务、素材与构建状态，让每个人都知道项目现在在哪里、下一步要去哪里。</p>
+          <div class="pill-row"><span>快速原型</span><span>跨职能协作</span><span>实时文档</span><span>版本追踪</span></div>
+        </div>
+      </div>
+      <div class="experience-cards">
+        <article><span>01</span><h3>DEFINE</h3><p>在开局两小时内锁定核心体验、范围和验证目标。</p></article>
+        <article><span>02</span><h3>PROTOTYPE</h3><p>可玩优先，用真实操作而不是会议验证设计假设。</p></article>
+        <article><span>03</span><h3>POLISH</h3><p>集中打磨最有记忆点的瞬间，形成完整交付体验。</p></article>
+      </div>
+    </section>
+
+    <section class="team-section" id="team">
+      <div class="section-index">02 / PEOPLE</div>
+      <div class="section-title-row">
+        <div><p class="eyebrow">核心节点</p><h2>不同技能，<br>同一条信号链。</h2></div>
+        <p>团队按项目灵活组队，核心成员负责决策与整合，更多协作者可以通过工作台随时加入当前 Jam。</p>
+      </div>
+      <div class="team-grid" id="public-team-grid">
+        <div class="team-empty"><span>NO MEMBERS YET</span><h3>团队正在集结</h3><p>新用户创建账号后，会自动出现在这里。</p><button type="button" data-open-workspace>创建第一个账号 →</button></div>
+      </div>
+    </section>
+
+    <section class="workspace-cta">
+      <p>TEAM WORKSPACE</p>
+      <h2>新世界正在编译。<br>加入下一个 <em>BUILD</em>。</h2>
+      <button class="primary-button light" type="button" data-open-workspace>打开协作工作台 <span>→</span></button>
+    </section>
+  </main>
+
+  <footer><span>© 2026 NEXUS LAB</span><span>BUILD FAST. PLAY WEIRD. SHIP TOGETHER.</span></footer>
+
+  <dialog class="workspace" id="workspace">
+    <div class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <div class="workspace-brand"><span>N/X</span><button type="button" data-close-workspace aria-label="关闭工作台">×</button></div>
+        <button class="project-switcher" type="button" data-open-project-settings><i id="sidebar-project-icon"></i><div><strong id="sidebar-project-name">未命名项目</strong><span>项目设置</span></div><b>⌄</b></button>
+        <nav class="workspace-nav">
+          <button class="active" data-view="overview"><span>⌂</span>项目概览</button>
+          <button data-view="document"><span>▤</span>策划文档</button>
+          <button data-view="environment"><span>⌘</span>环境安装</button>
+          <button data-view="tasks"><span>✓</span>任务看板</button>
+          <button data-view="people"><span>◎</span>团队成员</button>
+          <button data-view="assets"><span>◇</span>素材资产</button>
+          <button data-view="ideas"><span>✦</span>创意中心</button>
+        </nav>
+        <div class="workspace-bottom"><span>当前会话</span><div class="online-stack" id="online-members"></div><small><b></b> 等待成员登录</small></div>
+      </aside>
+      <section class="workspace-main">
+        <header class="workspace-header"><div><span>项目空间</span><b>/</b><strong id="view-title">项目概览</strong></div><div class="header-actions"><span class="server-state" id="server-state">等待连接</span><span class="save-state" id="save-state">所有更改已保存</span><button type="button" data-open-profile>个人资料</button><button type="button" data-open-login>账号登录</button><button type="button" data-logout hidden>退出登录</button><button type="button">分享</button><span class="user-avatar avatar-placeholder" id="current-user-avatar"></span></div></header>
+        <nav class="mobile-view-nav" aria-label="工作台视图切换">
+          <button class="active" type="button" data-view="overview"><span>⌂</span>概览</button>
+          <button type="button" data-view="document"><span>▤</span>策划</button>
+          <button type="button" data-view="environment"><span>⌘</span>环境</button>
+          <button type="button" data-view="tasks"><span>✓</span>任务</button>
+          <button type="button" data-view="people"><span>◎</span>成员</button>
+          <button type="button" data-view="assets"><span>◇</span>素材</button>
+          <button type="button" data-view="ideas"><span>✦</span>创意</button>
+        </nav>
+
+        <div class="workspace-view active" data-view-panel="overview">
+          <div class="view-intro">
+            <div><p>GAME JAM WORKSPACE</p><h2 id="workspace-greeting">项目尚未启动</h2><span id="overview-subline">创建账号并添加真实内容后，项目状态会显示在这里。</span></div>
+            <div class="progress-ring empty" id="overview-progress" style="--p:0"><b id="overview-progress-num">--</b><span id="overview-progress-label">任务完成率</span></div>
+          </div>
+          <div class="stat-grid" id="overview-stats"></div>
+          <div class="dashboard-grid">
+            <section class="focus-card">
+              <header><div><span>DELIVERY SNAPSHOT</span><h3>任务进度</h3></div><button type="button" data-view-jump="tasks">打开看板 →</button></header>
+              <div id="overview-board-body"></div>
+            </section>
+            <section class="activity-card">
+              <header><div><span>OPEN SIGNALS</span><h3>最新动态</h3></div><i>LIVE</i></header>
+              <ul id="overview-activity"></ul>
+              <p id="overview-activity-empty" class="activity-empty">还没有任何动态。去创意中心发布第一条信号。</p>
+            </section>
+          </div>
+          <div class="workspace-empty-state" id="overview-empty-state" hidden>
+            <span>EMPTY WORKSPACE</span><h3>从第一条真实信息开始</h3>
+            <p>这里还没有进度、任务或成员动态。</p>
+            <button type="button" data-view-jump="ideas">发布第一个创意 →</button>
+          </div>
+        </div>
+
+        <div class="workspace-view document-view" data-view-panel="document">
+          <div class="document-library" data-document-category="planning">
+            <div class="board-heading"><div><p>PLANNING LIBRARY</p><h2>策划文档</h2></div><button class="add-task" type="button" data-new-document="planning">+ 新增文档</button></div>
+            <div class="document-list" data-document-list="planning"><div class="document-empty">还没有策划文档</div></div>
+          </div>
+          <div class="document-editor" hidden>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 文档库</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span id="document-save-state">尚未保存</span></div>
+            <div class="document-layout"><article class="editor-page" id="editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div id="document-history-list"></div></aside></div>
+          </div>
+        </div>
+
+        <div class="workspace-view environment-view" data-view-panel="environment">
+          <div class="document-library" data-document-category="environment">
+            <div class="board-heading"><div><p>ONBOARDING GUIDE</p><h2>环境安装</h2><span>给新成员阅读的工具、依赖与项目启动说明。</span></div><button class="add-task" type="button" data-new-document="environment">+ 新增指南</button></div>
+            <div class="document-list" data-document-list="environment"><div class="document-empty">还没有环境安装指南</div></div>
+          </div>
+          <div class="document-editor" hidden>
+            <div class="doc-toolbar"><div><button type="button" data-back-documents>← 指南列表</button><button type="button" data-command="formatBlock" data-value="h2">标题</button><button type="button" data-command="bold"><b>B</b></button><button type="button" data-command="italic"><i>I</i></button><button type="button" data-command="insertUnorderedList">列表</button></div><div class="doc-actions"><button type="button" data-doc-duplicate>复制</button><button type="button" data-doc-export>导出 TXT</button><button type="button" data-doc-delete>删除文档</button></div><span class="document-save-state">尚未保存</span></div>
+            <div class="document-layout"><article class="editor-page environment-editor" contenteditable="true" spellcheck="false"></article><aside class="document-history"><p>修改记录</p><div class="document-history-list"></div></aside></div>
+          </div>
+        </div>
+
+        <div class="workspace-view" data-view-panel="tasks">
+          <div class="board-heading"><div><p>TEAM DELIVERY</p><h2>任务看板</h2></div><button class="add-task" type="button" data-new-task>+ 新建任务</button></div>
+          <div class="task-filter-bar"><select id="task-filter-type"><option value="all">全部类型</option><option value="planning">策划</option><option value="art">美术</option><option value="programming">程序</option><option value="audio">音效</option><option value="other">其他</option></select><select id="task-filter-assignee"><option value="all">全部指派人</option></select><select id="task-filter-priority"><option value="all">全部优先级</option><option value="urgent">紧急</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select><button type="button" id="task-clear-filters">清除筛选</button></div>
+          <div class="kanban" id="kanban">
+            <section data-task-status="todo"><header><span>待处理</span><b>0</b></header><div class="task-column"></div></section>
+            <section data-task-status="in_progress"><header><span>进行中</span><b>0</b></header><div class="task-column"></div></section>
+            <section data-task-status="review"><header><span>待评审</span><b>0</b></header><div class="task-column"></div></section>
+            <section data-task-status="done"><header><span>已完成</span><b>0</b></header><div class="task-column"></div></section>
+          </div>
+        </div>
+
+        <div class="workspace-view people-view" data-view-panel="people">
+          <div class="board-heading"><div><p>MEMBER DIRECTORY</p><h2>团队成员</h2></div><span class="member-total" id="member-total">0 位成员</span></div>
+          <div class="people-list" id="workspace-people-list"><div class="people-empty">还没有注册成员</div></div>
+        </div>
+        <div class="workspace-view assets-view" data-view-panel="assets">
+          <div class="board-heading"><div><p>PROJECT LIBRARY</p><h2>素材资产</h2></div><span class="asset-upload-state" id="asset-upload-state"></span><button class="add-task" type="button" data-trigger-upload>+ 上传资产</button></div>
+          <div class="asset-toolbar"><div class="asset-filters"><button class="selected" type="button" data-asset-category="all">全部</button><button type="button" data-asset-category="visual">视觉</button><button type="button" data-asset-category="audio">音频</button><button type="button" data-asset-category="build">构建</button></div><span id="asset-total">共 0 个资产</span></div>
+          <div class="asset-grid" id="asset-grid"><div class="asset-empty"><span>EMPTY LIBRARY</span><h3>还没有素材资产</h3><p>登录后点击「上传资产」，把视觉稿、音频与构建包放进团队库。</p></div></div>
+          <input id="asset-upload" type="file" accept="image/*,audio/*,video/*,.zip,.pdf,.fbx,.glb,.gltf" multiple hidden>
+        </div>
+
+        <div class="workspace-view ideas-view" data-view-panel="ideas">
+          <div class="ideas-heading"><div><p>OPEN SIGNALS</p><h2>创意中心</h2><span>把还没成形的想法丢进来。让团队帮它长出下一步。</span></div><div class="ideas-online">暂无在线状态</div></div>
+          <form class="idea-composer" id="idea-form"><div class="composer-avatar avatar-placeholder"></div><div class="composer-main"><input id="idea-name" aria-label="实名 ID" placeholder="登录后显示 ID" readonly><div class="idea-type-picker"><label><input type="radio" name="idea-type" value="gameplay" checked><span>玩法创意</span></label><label><input type="radio" name="idea-type" value="concept"><span>概念创意</span></label></div><textarea id="idea-content" rows="3" placeholder="分享一个想法、灵感或正在尝试的方案..." required></textarea><div class="composer-preview" id="composer-preview"></div><div class="composer-actions"><label class="image-button" for="idea-image">▧ 添加图片<input id="idea-image" type="file" accept="image/*" hidden></label><span>所有成员可见 · 将显示实名 ID</span><button type="submit">发布动态 <b>↗</b></button></div></div></form>
+          <div class="idea-filter-bar"><div><span>筛选</span><select id="filter-member" aria-label="按成员筛选"><option value="all">全部成员</option></select><select id="filter-time" aria-label="按时间筛选"><option value="all">全部时间</option><option value="today">今天</option><option value="week">最近 7 天</option><option value="month">最近 30 天</option></select><select id="filter-type" aria-label="按类型筛选"><option value="all">全部类型</option><option value="gameplay">玩法创意</option><option value="concept">概念创意</option></select></div><button type="button" id="clear-filters">清除筛选</button></div>
+          <div class="idea-feed" id="idea-feed"><div class="feed-empty"><span>NO SIGNALS YET</span><h3>还没有人发布动态</h3><p>登录后发布第一条真实创意。</p></div></div>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog class="login-dialog" id="login-dialog">
+    <form method="dialog" class="login-card" id="login-form">
+      <button class="login-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      <p>MEMBER ACCESS</p>
+      <h2 id="auth-title">账号登录</h2>
+      <span id="auth-description">使用名称 ID 和密码登录。发布内容会显示你的公开身份。</span>
+      <div class="auth-tabs"><button class="active" type="button" data-auth-mode="login">登录</button><button type="button" data-auth-mode="register">创建账号</button></div>
+      <label for="real-id">名称 ID</label>
+      <input id="real-id" name="real-id" placeholder="输入你的名称 ID" maxlength="32" autocomplete="username" required>
+      <label for="account-password">密码</label>
+      <input id="account-password" name="account-password" type="password" placeholder="至少 6 个字符" maxlength="128" autocomplete="current-password" required>
+      <div class="register-fields" id="register-fields"><label for="register-bio">自我介绍</label><textarea id="register-bio" maxlength="200" rows="3" placeholder="介绍你的角色、技能或创作偏好"></textarea><small><b id="bio-count">0</b> / 200</small></div>
+      <button class="login-submit" type="button" id="login-submit">登录并继续 <b>↗</b></button>
+      <small id="login-message">还没有账号？切换到“创建账号”</small>
+    </form>
+  </dialog>
+
+  <dialog class="login-dialog" id="profile-dialog">
+    <form method="dialog" class="login-card profile-card" id="profile-form">
+      <button class="login-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      <p>IDENTITY NODE</p>
+      <h2>个人资料</h2>
+      <span>自定义你的团队头像。头像会显示在动态、评论和协作状态中。</span>
+      <div class="profile-avatar-preview" id="profile-avatar-preview">?</div>
+      <label class="avatar-upload" for="avatar-input">选择头像<input id="avatar-input" type="file" accept="image/*" hidden></label>
+      <label for="profile-bio">自我介绍</label>
+      <textarea id="profile-bio" maxlength="200" rows="4" placeholder="介绍你的角色、技能或创作偏好"></textarea>
+      <button class="login-submit" type="button" id="profile-save">保存个人资料 <b>↗</b></button>
+      <small id="profile-message">建议使用正方形图片，最大 2 MB</small>
+    </form>
+  </dialog>
+
+  <dialog class="login-dialog" id="new-document-dialog">
+    <form method="dialog" class="login-card" id="new-document-form">
+      <button class="login-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      <p>NEW FILE</p><h2 id="new-document-title">新增文档</h2>
+      <span>文档创建后会记录作者和每次修改。</span>
+      <label for="document-title-input">文档标题</label>
+      <input id="document-title-input" maxlength="100" placeholder="输入文档标题" required>
+      <button class="login-submit" type="button" id="create-document">创建文档 <b>↗</b></button>
+      <small id="document-create-message"></small>
+    </form>
+  </dialog>
+
+  <dialog class="login-dialog task-dialog" id="new-task-dialog">
+    <form method="dialog" class="login-card task-form-card" id="new-task-form">
+      <button class="login-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      <p>NEW WORK ITEM</p><h2 id="task-dialog-heading">新建任务</h2><span id="task-dialog-hint">创建人将自动记录为当前账号。</span>
+      <div class="task-form-grid">
+        <label class="wide">任务标题<input id="task-title" maxlength="150" placeholder="明确描述要交付的结果" required></label>
+        <label>任务类型<select id="task-type"><option value="planning">策划</option><option value="art">美术</option><option value="programming">程序</option><option value="audio">音效</option><option value="other">其他</option></select></label>
+        <label>指派给<select id="task-assignee"><option value="">暂不指派</option></select></label>
+        <label>初始状态<select id="task-status"><option value="todo">待处理</option><option value="in_progress">进行中</option><option value="review">待评审</option><option value="done">已完成</option></select></label>
+        <label>优先级<select id="task-priority"><option value="medium">中</option><option value="urgent">紧急</option><option value="high">高</option><option value="low">低</option></select></label>
+        <label>预计工时<input id="task-hours" type="number" min="0" step="0.5" placeholder="小时"></label>
+        <label>预计完成时间<input id="task-due-date" type="date"></label>
+        <label class="wide">任务描述<textarea id="task-description" rows="4" maxlength="5000" placeholder="补充验收标准、依赖和注意事项"></textarea></label>
+      </div>
+      <button class="login-submit" type="button" id="create-task">创建任务 <b>↗</b></button><small id="task-create-message"></small>
+    </form>
+  </dialog>
+
+  <dialog class="login-dialog" id="project-settings-dialog">
+    <form method="dialog" class="login-card project-settings-card" id="project-settings-form">
+      <button class="login-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      <p>PROJECT IDENTITY</p><h2>项目设置</h2><span>自定义团队当前项目的名称和图标，保存后所有成员都会看到更新。</span>
+      <label for="project-name-input">项目名称</label><input id="project-name-input" maxlength="80" placeholder="输入项目名称" required>
+      <label class="project-icon-upload" for="project-icon-input"><span id="project-icon-preview">◇</span><b>选择项目图标</b><small>PNG、JPG 或 SVG · 最大 3 MB</small><input id="project-icon-input" type="file" accept="image/*" hidden></label>
+      <button class="login-submit" type="button" id="save-project-settings">保存项目设置 <b>↗</b></button><small id="project-settings-message"></small>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
